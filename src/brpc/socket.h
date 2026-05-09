@@ -57,7 +57,10 @@ namespace rdma {
 class RdmaEndpoint;
 class RdmaConnect;
 }
-
+namespace ubring {
+    class UBShmEndpoint;
+    class UBConnect;
+}
 class Socket;
 class AuthContext;
 class EventDispatcher;
@@ -317,6 +320,9 @@ friend class policy::RtmpContext;
 friend class schan::ChannelBalancer;
 friend class rdma::RdmaEndpoint;
 friend class rdma::RdmaConnect;
+friend class ubring::UBShmEndpoint;
+friend class ubring::UBConnect;
+friend class UBShmTransport;
 friend class HealthCheckTask;
 friend class OnAppHealthCheckDone;
 friend class HealthCheckManager;

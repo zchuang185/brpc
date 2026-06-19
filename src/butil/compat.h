@@ -36,7 +36,7 @@ struct pthread_spinlock_t {
     dispatch_semaphore_t sem;
 };
 inline int pthread_spin_init(pthread_spinlock_t *__lock, int __pshared) {
-    if (__pshared != 0) {
+    if (__pshared != 0 && __pshared != PTHREAD_PROCESS_PRIVATE) {
         return EINVAL;
     }
     __lock->sem = dispatch_semaphore_create(1);

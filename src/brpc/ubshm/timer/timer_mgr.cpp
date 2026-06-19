@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include <pthread.h>
 #include <sched.h>
 #include <errno.h>
@@ -73,8 +75,10 @@ static RETURN_CODE DeleteTimerInner(uint32_t fd) {
     kevent(g_epollFd, &evt, 1, NULL, 0, NULL);
 #endif
 
+#if defined(OS_LINUX)
     uint64_t exp = 0;
     read((int)fd, &exp, sizeof(exp));
+#endif
 
     close((int)fd);
     atomic_fetch_sub(&g_totalTimerNum, 1);
@@ -153,7 +157,7 @@ RETURN_CODE TimerInit(void) {
     if (g_timerFdCtxMap == NULL) {
         g_timerFdCtxMap = (TimerFdCtx *)malloc(sizeof(TimerFdCtx) * maxSystemFd);
         if (UNLIKELY(!g_timerFdCtxMap)) {
-            LOG(ERROR) << "Fail to malloc space for timer modules. errno=%d", errno;
+            LOG(ERROR) << "Fail to malloc space for timer modules. errno=" << errno;
             return UBRING_ERR;
         }
 
@@ -223,7 +227,10 @@ void *TimerEpoll(void *args) {
         int32_t readyNum = epoll_wait(g_epollFd, readyEvents, MAX_TIMER,
                                       TIMER_EPOLL_WAIT_TIMEOUT);
 #elif defined(OS_MACOSX)
-        struct timespec timeout = {0, TIMER_EPOLL_WAIT_TIMEOUT * 1000000};
+        struct timespec timeout = {
+            TIMER_EPOLL_WAIT_TIMEOUT / 1000,
+            (TIMER_EPOLL_WAIT_TIMEOUT % 1000) * 1000000
+        };
         int32_t readyNum = kevent(g_epollFd, NULL, 0, readyEvents, MAX_TIMER, &timeout);
 #endif
 
@@ -249,6 +256,7 @@ void *TimerEpoll(void *args) {
             int32_t timerFd = event->ident;
 #endif
 
+#if defined(OS_LINUX)
             uint64_t exp = 0;
             if (read(timerFd, &exp, sizeof(exp)) < 0) {
                 if (errno != EBADF) {
@@ -256,6 +264,7 @@ void *TimerEpoll(void *args) {
                 }
                 continue;
             }
+#endif
             if (TimerFdCtxValidate((uint32_t)timerFd) != UBRING_OK) {
                 continue;
             }
@@ -301,8 +310,10 @@ void DeleteTimerSafe(uint32_t fd) {
     kevent(g_epollFd, &evt, 1, NULL, 0, NULL);
 #endif
 
+#if defined(OS_LINUX)
     uint64_t exp = 0;
     read((int)fd, &exp, sizeof(exp));
+#endif
 
     close((int)fd);
     atomic_fetch_sub(&g_totalTimerNum, 1);
@@ -352,10 +363,20 @@ int32_t TimerStart(const itimerspec *time, void *(*cb)(void *), void *args) {
     int32_t ret = epoll_ctl(g_epollFd, EPOLL_CTL_ADD, timerFd, &event);
 #elif defined(OS_MACOSX)
     struct kevent event;
-    uint64_t timeout_nsec = time->it_value.tv_sec * 1000000000ULL + time->it_value.tv_nsec;
     uint64_t interval_nsec = time->it_interval.tv_sec * 1000000000ULL + time->it_interval.tv_nsec;
-    EV_SET(&event, timerFd, EVFILT_TIMER, EV_ADD | EV_ENABLE, 0,
-           timeout_nsec / 1000000, NULL);
+    uint64_t timeout_nsec = time->it_value.tv_sec * 1000000000ULL + time->it_value.tv_nsec;
+    uint16_t event_flags = EV_ADD | EV_ENABLE;
+    if (interval_nsec > 0) {
+        timeout_nsec = interval_nsec;
+    } else {
+        event_flags |= EV_ONESHOT;
+    }
+    uint64_t timeout_msec = timeout_nsec / 1000000;
+    if (timeout_msec == 0) {
+        timeout_msec = 1;
+    }
+    EV_SET(&event, timerFd, EVFILT_TIMER, event_flags, 0,
+           timeout_msec, NULL);
     int32_t ret = kevent(g_epollFd, &event, 1, NULL, 0, NULL);
 #endif
 
@@ -434,7 +455,6 @@ RETURN_CODE TimerFdCtxValidate(uint32_t fd) {
         return UBRING_ERR;
     }
     if (g_timerFdCtxMap[fd].status == TIMER_CONTEXT_NOT_USING) {
-        LOG(ERROR) << "TimerFd=" << fd << " has wrong status=" << g_timerFdCtxMap[fd].status;
         return UBRING_ERR;
     }
     if (g_timerFdCtxMap[fd].cb == NULL) {
@@ -451,6 +471,7 @@ static int timerfd_create_macosx(int clockid, int flags) {
     if (pipe(pipefd) == -1) {
         return -1;
     }
+    close(pipefd[1]);
     return pipefd[0];
 }
 

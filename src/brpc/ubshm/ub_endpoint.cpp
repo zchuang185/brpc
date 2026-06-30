@@ -135,6 +135,7 @@ std::string HelloMessage::toString() const {
 
 UBShmEndpoint::UBShmEndpoint(Socket* s)
     : _socket(s)
+    , _socket_id(s ? s->id() : INVALID_SOCKET_ID)
     , _state(UNINIT)
     , _ub_ring(nullptr)
     , _cq_sid(INVALID_SOCKET_ID)
@@ -739,46 +740,11 @@ void UBShmEndpoint::DeallocateResources() {
             s->SetFailed();
         }
     }
-
-    // The polling bthread (PollingModeInitialize) iterates over a local
-    // snapshot of registered CQ socket ids and, for each one, dereferences the
-    // associated UBShmEndpoint (via Socket::user()) to run PollIn/PollOut.
-    // Those callbacks read `ep->_ub_ring` (e.g. IsUbrTrxReadable) and
-    // `ep->_socket`. The REMOVE op enqueued above and SetFailed() above only
-    // stop *future* iterations; an iteration already in flight still holds a
-    // Socket reference and may be dereferencing `this`/`_ub_ring` right now.
-    //
-    // If we return here, the caller (Reset) immediately does `delete _ub_ring`
-    // and the transport later does `delete _ub_ep`, racing with the in-flight
-    // poller -> use-after-free / SIGSEGV (observed in PollOut at
-    // versioned_ref_with_id.h:386, id was garbage). So we must wait until no
-    // polling iteration can still touch us. Socket::Status() keeps reporting
-    // the "failed" state with the live nref until every reference (held by
-    // pollers) is released and the socket slot is recycled (returns -1).
-    if (INVALID_SOCKET_ID != _cq_sid) {
-        const int64_t deadline_us = butil::gettimeofday_us() + 5 * 1000000LL;
-        while (true) {
-            int32_t nref = 0;
-            const int st = Socket::Status(_cq_sid, &nref);
-            if (st < 0 || nref <= 0) {
-                break;  // recycled, or no outstanding reference: safe to free
-            }
-            if (butil::gettimeofday_us() >= deadline_us) {
-                LOG(WARNING) << "UBShmEndpoint=" << this
-                             << " cq_sid=" << _cq_sid
-                             << " still has nref=" << nref
-                             << " after 5s, polling bthread may still be"
-                                " running; risk of use-after-free.";
-                break;
-            }
-            bthread_usleep(1000);  // 1ms
-        }
-    }
 }
 
 void UBShmEndpoint::PollIn(UBShmEndpoint* ep, uint32_t epEvent) {
     SocketUniquePtr s;
-    if (Socket::Address(ep->_socket->id(), &s) < 0) {
+    if (Socket::Address(ep->_socket_id, &s) < 0) {
         return;
     }
     auto* ub_transport = static_cast<UBShmTransport*>(s->_transport.get());
@@ -840,15 +806,15 @@ void UBShmEndpoint::PollIn(UBShmEndpoint* ep, uint32_t epEvent) {
 
 void UBShmEndpoint::PollOut(UBShmEndpoint* ep, uint32_t epEvent) {
     SocketUniquePtr s;
-    if (Socket::Address(ep->_socket->id(), &s) < 0) {
+    if (Socket::Address(ep->_socket_id, &s) < 0) {
         return;
     }
     auto* ub_transport = static_cast<UBShmTransport*>(s->_transport.get());
     CHECK(ep == ub_transport->_ub_ep);
     if (ep->IsWritable()) {
-        ep->_socket->WakeAsEpollOut();
+        s->WakeAsEpollOut();
     }
-    
+
 }
 
 int UBShmEndpoint::GlobalInitialize() {

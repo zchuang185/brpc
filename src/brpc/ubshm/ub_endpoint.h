@@ -165,6 +165,7 @@ private:
 
     // Not owner
     Socket* _socket;
+    SocketId _socket_id;
 
     State _state;
 

@@ -662,6 +662,19 @@ RETURN_CODE UBRing::UbrTrxFreeShm(UbrTrx *trx)
     return UBRING_OK;
 }
 
+RETURN_CODE UBRing::UbrUnlinkLocalShm()
+{
+    if (UNLIKELY(_trx == NULL)) {
+        return UBRING_ERR;
+    }
+    RETURN_CODE rc = ShmFree(&_trx->localShm);
+    if (rc != UBRING_OK && rc != SHM_ERR_NOT_FOUND && rc != SHM_ERR_RESOURCE_ATTACHED) {
+        LOG(WARNING) << "Unlink local shm " << _trx->localShm.name << " failed, rc=" << rc;
+        return rc;
+    }
+    return UBRING_OK;
+}
+
 void UBRing::PreWriteAddr(uint8_t *addr, size_t len)
 {
     if (addr == NULL) {

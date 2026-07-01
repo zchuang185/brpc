@@ -455,6 +455,7 @@ void* UBShmEndpoint::ProcessHandshakeAtClient(void* arg) {
 
     if (ub_transport->_ub_state == UBShmTransport::UB_ON) {
         ep->_state = ESTABLISHED;
+        ep->_ub_ring->UbrUnlinkLocalShm();
         LOG_IF(INFO, FLAGS_ub_trace_verbose) 
             << "Client handshake ends (use ubring) on " << s->description();
     } else {
@@ -601,6 +602,7 @@ void* UBShmEndpoint::ProcessHandshakeAtServer(void* arg) {
         } else {
             ub_transport->_ub_state = UBShmTransport::UB_ON;
             ep->_state = ESTABLISHED;
+            ep->_ub_ring->UbrUnlinkLocalShm();
             LOG_IF(INFO, FLAGS_ub_trace_verbose) 
                 << "Server handshake ends (use ubring) on " << s->description();
         }

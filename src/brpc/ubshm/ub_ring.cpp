@@ -334,7 +334,7 @@ int UBRing::UbrTrxSend(const void *buf, uint32_t bufLen)
     if (UNLIKELY(CheckTrxSendPreCheck(_trx) != UBRING_OK)) {
         return UBRING_ERR;
     }
-    // 1.2 计算空间
+    // 1.2 Calculate space
     auto *dataStatusMsg = (UbrDataStatusQMsg *)_trx->ubrTx.localDataStatusQ.addr;
     auto *dataMsg = (UbrMsgFormat *)_trx->ubrTx.remoteDataQ.addr;
     uint32_t cap = _trx->ubrTx.capacity;
@@ -548,8 +548,6 @@ RETURN_CODE UBRing::IsUbrTrxReadable(uint32_t epEvent)
         return UBRING_ERR;
     }
     if (UNLIKELY(_trx->ubrTx.trxState != UBR_STATE_CONNECTED)) {
-        // TODO mwj 这几块的日志是否需要删除
-        // LOG(ERROR) << "The trx is not connected state.";
         return UBRING_ERR;
     }
 

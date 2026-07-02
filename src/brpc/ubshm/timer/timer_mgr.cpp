@@ -360,7 +360,7 @@ int32_t TimerStart(const itimerspec *time, void *(*cb)(void *), void *args) {
 #endif
 
     if (UNLIKELY(ret != 0)) {
-        CloseTimerFd((uint32_t)timerFd);
+        CloseTimerFd(timerFd);
         LOG(ERROR) << "Failed to add event to epoll/kqueue. errno=" << errno;
         return -1;
     }
@@ -383,7 +383,7 @@ int32_t TimerStart(const itimerspec *time, void *(*cb)(void *), void *args) {
 #endif
             LOG(ERROR) << "Failed to delete the timer fd=" << timerFd << " with errno=" << errno;
         }
-        CloseTimerFd((uint32_t)timerFd);
+        CloseTimerFd(timerFd);
         std::atomic_fetch_sub(&g_total_timer_num, 1);
         LOG(ERROR) << "Failed to set timer";
         return -1;
@@ -396,7 +396,7 @@ uint32_t GetActiveTimerNum(void) {
     return std::atomic_load(&g_total_timer_num);
 }
 
-void CloseTimerFd(uint32_t fd) {
+void CloseTimerFd(int fd) {
     g_timer_fd_ctx_map[fd].cb = NULL;
     g_timer_fd_ctx_map[fd].args = NULL;
     g_timer_fd_ctx_map[fd].status = TIMER_CONTEXT_NOT_USING;

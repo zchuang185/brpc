@@ -68,18 +68,6 @@ static const uint32_t ACK_MSG_UB_OK = 0x1;
 
 static butil::Mutex* g_ubring_resource_mutex = NULL;
 
-struct HelloMessage {
-    void Serialize(void* data) const;
-    void Deserialize(void* data);
-    std::string toString() const;
-
-    uint16_t msg_len;
-    uint16_t hello_ver;
-    uint16_t impl_ver;
-    uint64_t len;
-    char shm_name[SHM_MAX_NAME_BUFF_LEN];
-};
-
 void HelloMessage::Serialize(void* data) const {
     char* current_pos = static_cast<char*>(data);
     const uint16_t net_msg_len = butil::HostToNet16(msg_len);

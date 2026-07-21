@@ -224,7 +224,7 @@ struct ServerOptions {
     // Force ssl for all connections of the port to Start().
     bool force_ssl;
 
-    // the server socket mode uses tcp or rdma or other
+    // the server socket mode uses tcp or rdma or ubring or urma
     // Default: SOCKET_MODE_TCP
     SocketMode socket_mode;
 
@@ -717,7 +717,7 @@ friend class Controller;
     int SetServiceMaxConcurrency(T* service) {
         if (NULL != service && NULL != service->_status) {
             const AdaptiveMaxConcurrency* amc = &service->_max_concurrency;
-            if (amc->type() == AdaptiveMaxConcurrency::UNLIMITED) {
+            if (amc->type() == AdaptiveMaxConcurrency::UNLIMITED()) {
                 amc = &_options.method_max_concurrency;
             }
             ConcurrencyLimiter* cl = NULL;

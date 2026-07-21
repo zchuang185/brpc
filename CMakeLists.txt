@@ -27,6 +27,7 @@ option(WITH_THRIFT "With thrift framed protocol supported" OFF)
 option(WITH_BTHREAD_TRACER "With bthread tracer supported" OFF)
 option(WITH_SNAPPY "With snappy" OFF)
 option(WITH_RDMA "With RDMA" OFF)
+option(WITH_URMA "With URMA (openEuler Unified Remote Memory Access)" OFF)
 option(WITH_DEBUG_BTHREAD_SCHE_SAFETY "With debugging bthread sche safety" OFF)
 option(WITH_DEBUG_LOCK "With debugging lock" OFF)
 option(WITH_ASAN "With AddressSanitizer" OFF)
@@ -104,6 +105,11 @@ if(WITH_RDMA)
     set(WITH_RDMA_VAL "1")
 endif()
 
+set(WITH_URMA_VAL "0")
+if(WITH_URMA)
+    set(WITH_URMA_VAL "1")
+endif()
+
 set(WITH_DEBUG_BTHREAD_SCHE_SAFETY_VAL "0")
 if(WITH_DEBUG_BTHREAD_SCHE_SAFETY)
     set(WITH_DEBUG_BTHREAD_SCHE_SAFETY_VAL "1")
@@ -136,7 +142,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     set(CMAKE_CPP_FLAGS "${CMAKE_CPP_FLAGS} -Wno-deprecated-declarations -Wno-inconsistent-missing-override")
 endif()
 
-set(CMAKE_CPP_FLAGS "${CMAKE_CPP_FLAGS} ${DEFINE_CLOCK_GETTIME} -DBRPC_WITH_GLOG=${WITH_GLOG_VAL} -DBRPC_WITH_RDMA=${WITH_RDMA_VAL} -DBRPC_DEBUG_BTHREAD_SCHE_SAFETY=${WITH_DEBUG_BTHREAD_SCHE_SAFETY_VAL} -DBRPC_DEBUG_LOCK=${WITH_DEBUG_LOCK_VAL}")
+set(CMAKE_CPP_FLAGS "${CMAKE_CPP_FLAGS} ${DEFINE_CLOCK_GETTIME} -DBRPC_WITH_GLOG=${WITH_GLOG_VAL} -DBRPC_WITH_RDMA=${WITH_RDMA_VAL} -DBRPC_WITH_URMA=${WITH_URMA_VAL} -DBRPC_DEBUG_BTHREAD_SCHE_SAFETY=${WITH_DEBUG_BTHREAD_SCHE_SAFETY_VAL} -DBRPC_DEBUG_LOCK=${WITH_DEBUG_LOCK_VAL}")
 if (WITH_ASAN)
     set(CMAKE_CPP_FLAGS "${CMAKE_CPP_FLAGS} -fsanitize=address")
     set(CMAKE_C_FLAGS "${CMAKE_CPP_FLAGS} -fsanitize=address")
@@ -270,6 +276,22 @@ if(WITH_RDMA)
     endif()
 endif()
 
+if(WITH_URMA)
+    message("brpc compile with urma")
+    # Try to find the real liburma. If it is not installed, fall back to the
+    # bundled mock (src/brpc/urma/mock_urma.cpp) so CI can build and test
+    # UrmaTransport on hosts without URMA hardware. The mock provides
+    # link-time stubs of every urma_* symbol the transport calls.
+    find_library(URMA_LIB NAMES urma)
+    if(URMA_LIB)
+        message(STATUS "Found liburma: ${URMA_LIB}")
+        set(URMA_USE_MOCK 0)
+    else()
+        message(WARNING "liburma not found; building UrmaTransport with the bundled mock (no real URMA hardware).")
+        set(URMA_USE_MOCK 1)
+    endif()
+endif()
+
 find_library(PROTOC_LIB NAMES protoc)
 if(NOT PROTOC_LIB)
     message(FATAL_ERROR "Fail to find protoc lib")
@@ -320,6 +342,13 @@ endif()
 
 if(WITH_RDMA)
     list(APPEND DYNAMIC_LIB ${RDMA_LIB})
+endif()
+
+if(WITH_URMA)
+    message(STATUS "brpc compile with urma (mock=${URMA_USE_MOCK})")
+    if(NOT URMA_USE_MOCK)
+        list(APPEND DYNAMIC_LIB ${URMA_LIB})
+    endif()
 endif()
 
 set(BRPC_PRIVATE_LIBS "-lgflags -lprotobuf -lleveldb -lprotoc -lssl -lcrypto -ldl -lz")
@@ -509,6 +538,14 @@ file(GLOB_RECURSE BRPC_SOURCES "${PROJECT_SOURCE_DIR}/src/brpc/*.cpp")
 file(GLOB_RECURSE THRIFT_SOURCES "${PROJECT_SOURCE_DIR}/src/brpc/thrift*.cpp")
 file(GLOB_RECURSE EXCLUDE_SOURCES "${PROJECT_SOURCE_DIR}/src/brpc/event_dispatcher_*.cpp")
 
+# When building with the real liburma, exclude the bundled mock so its urma_*
+# symbols do not clash with the library. When liburma is absent, keep it so CI
+# can build/test UrmaTransport without URMA hardware.
+if(WITH_URMA AND NOT URMA_USE_MOCK)
+    list(REMOVE_ITEM BRPC_SOURCES
+         "${PROJECT_SOURCE_DIR}/src/brpc/urma/mock_urma.cpp")
+endif()
+
 if(WITH_THRIFT)
     message("brpc compile with thrift protocol")
 else()
@@ -548,7 +585,8 @@ set(PROTO_FILES idl_options.proto
                 brpc/policy/mongo.proto
                 brpc/trackme.proto
                 brpc/streaming_rpc_meta.proto
-                brpc/proto_base.proto)
+                brpc/proto_base.proto
+                brpc/urma/urma_handshake.proto)
 file(MAKE_DIRECTORY ${PROJECT_BINARY_DIR}/output/include/brpc)
 set(PROTOC_FLAGS ${PROTOC_FLAGS} -I${PROTOBUF_INCLUDE_DIR})
 compile_proto(PROTO_HDRS PROTO_SRCS ${PROJECT_BINARY_DIR}

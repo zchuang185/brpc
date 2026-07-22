@@ -278,16 +278,18 @@ endif()
 
 if(WITH_URMA)
     message("brpc compile with urma")
-    # Try to find the real liburma. If it is not installed, fall back to the
-    # bundled mock (src/brpc/urma/mock_urma.cpp) so CI can build and test
-    # UrmaTransport on hosts without URMA hardware. The mock provides
-    # link-time stubs of every urma_* symbol the transport calls.
+    # Find the URMA SDK headers (urma/urma_api.h) and library.
+    # If liburma is not installed, fall back to the bundled mock
+    # (src/brpc/urma/mock_urma.cpp) so CI can build and test UrmaTransport
+    # on hosts without URMA hardware. The mock provides link-time stubs of
+    # every urma_* symbol the transport calls.
+    find_path(URMA_INCLUDE_PATH NAMES urma_api.h)
     find_library(URMA_LIB NAMES urma)
-    if(URMA_LIB)
-        message(STATUS "Found liburma: ${URMA_LIB}")
+    if(URMA_INCLUDE_PATH AND URMA_LIB)
+        message(STATUS "Found URMA SDK: ${URMA_INCLUDE_PATH}, ${URMA_LIB}")
         set(URMA_USE_MOCK 0)
     else()
-        message(WARNING "liburma not found; building UrmaTransport with the bundled mock (no real URMA hardware).")
+        message(WARNING "URMA SDK not found; building UrmaTransport with the bundled mock (no real URMA hardware).")
         set(URMA_USE_MOCK 1)
     endif()
 endif()
@@ -316,6 +318,9 @@ include_directories(
         ${PROTOBUF_INCLUDE_DIRS}
         ${LEVELDB_INCLUDE_PATH}
         )
+if(WITH_URMA AND NOT URMA_USE_MOCK)
+    include_directories(${URMA_INCLUDE_PATH})
+endif()
 
 set(DYNAMIC_LIB
     ${GFLAGS_LIBRARY}
@@ -585,8 +590,7 @@ set(PROTO_FILES idl_options.proto
                 brpc/policy/mongo.proto
                 brpc/trackme.proto
                 brpc/streaming_rpc_meta.proto
-                brpc/proto_base.proto
-                brpc/urma/urma_handshake.proto)
+                brpc/proto_base.proto)
 file(MAKE_DIRECTORY ${PROJECT_BINARY_DIR}/output/include/brpc)
 set(PROTOC_FLAGS ${PROTOC_FLAGS} -I${PROTOBUF_INCLUDE_DIR})
 compile_proto(PROTO_HDRS PROTO_SRCS ${PROJECT_BINARY_DIR}

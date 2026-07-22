@@ -91,7 +91,7 @@ Like RDMA / UBRing, the control plane is TCP and the data plane is URMA:
 1. TCP connect completes.
 2. `UrmaConnect::StartConnect` spawns the client handshake bthread.
 3. Both sides exchange a `UrmaHello` message (magic `URMA` for v2 binary,
-   `URM3` for v3 protobuf) over the TCP fd. The message carries the local
+   `URMA` magic) over the TCP fd. The message carries the local
    EID, jetty id, recv buffer count, and the flattened buffer-pool segment.
 4. Each side calls `urma_import_seg` **before** `urma_import_jetty` to
    establish transport-path (TP) routing for the remote EID. Skipping the
@@ -130,7 +130,6 @@ All flags use the `urma_` prefix (mirroring RDMA's `rdma_` prefix):
 | `--urma_prepared_jetty_cnt` | 1024 | Pre-allocated Jetty+CQ sets |
 | `--urma_buffer_size` | 8192 | Per-buffer size in the pool (bytes) |
 | `--urma_buffer_count` | 65536 | Number of buffers in the pool |
-| `--urma_client_handshake_version` | 2 | Client wire version (2=binary, 3=protobuf) |
 
 ## Coexistence with UBRing
 

@@ -40,8 +40,8 @@
 #include "butil/scoped_lock.h"
 #include "butil/synchronization/lock.h"
 
-#include "brpc/urma/urma_api.h"
-#include "brpc/urma/urma_types.h"
+#include "urma_api.h"
+#include "urma_types.h"
 
 DECLARE_int32(task_group_ntags);
 

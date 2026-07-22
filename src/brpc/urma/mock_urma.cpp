@@ -36,7 +36,7 @@
 
 #if BRPC_WITH_URMA
 
-#include "brpc/urma/urma_api.h"
+#include "urma_api.h"
 
 #include <algorithm>
 #include <atomic>

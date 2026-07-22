@@ -37,10 +37,6 @@ class UrmaTransport : public Transport {
 friend class TransportFactory;
 friend class urma::UrmaEndpoint;
 friend class urma::UrmaConnect;
-friend class urma::UrmaHandshakeServerV2;
-friend class urma::UrmaHandshakeClientV2;
-friend class urma::UrmaHandshakeServerV3;
-friend class urma::UrmaHandshakeClientV3;
 public:
     void Init(Socket* socket, const SocketOptions& options) override;
     void Release() override;

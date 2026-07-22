@@ -32,10 +32,9 @@
 
 #if BRPC_WITH_URMA
 
-#include "brpc/urma/urma_api.h"
-#include "brpc/urma/urma_types.h"
+#include "urma_api.h"
+#include "urma_types.h"
 #include "brpc/urma/urma_handshake.h"
-#include "brpc/urma/urma_handshake.pb.h"
 
 namespace brpc {
 
@@ -99,12 +98,11 @@ class BAIDU_CACHELINE_ALIGNMENT UrmaEndpoint : public SocketUser {
     friend class UrmaConnect;
     friend class Socket;
     friend class UrmaTransport;
-    friend class UrmaHandshakeClientV2;
-    friend class UrmaHandshakeServerV2;
-    friend class UrmaHandshakeClientV3;
-    friend class UrmaHandshakeServerV3;
     friend int  DrainBytes(UrmaEndpoint*, size_t);
     friend int  ReadBodyAndNegotiate(UrmaEndpoint*, ParsedHello*, bool*);
+    friend int  SendLocalHello(UrmaEndpoint*);
+    friend int  ReceiveAndParseRemoteHello(UrmaEndpoint*, ParsedHello*, bool*);
+    friend int  ReceiveAndParseRemoteHelloServer(UrmaEndpoint*, ParsedHello*, bool*);
 
 public:
     explicit UrmaEndpoint(Socket* s);
@@ -165,13 +163,6 @@ public:
     // ---- Hello builders/parsers (used by urma_handshake.cpp) ----
     // Fill the v2 binary HelloMessage with this endpoint's local params.
     void FillLocalHelloV2(v2_wire::HelloMessage* out) const;
-    // Fill the v3 protobuf UrmaHello with this endpoint's local params.
-    void FillLocalHelloV3(UrmaHello* out) const;
-    // Write "URM3" + 4B big-endian pb_size + protobuf bytes.
-    int WriteHelloV3(const UrmaHello& msg);
-    // Read pb_size (4B) + protobuf bytes; parse; validate. Sets *negotiated
-    // to false (returns 0) if the message is invalid.
-    int ReadAndParseHelloV3(ParsedHello* out, bool* negotiated);
 
     // Apply the peer's negotiated parameters (window sizes, peer jetty/seg).
     void ApplyRemoteHello(const ParsedHello& remote);
@@ -255,7 +246,7 @@ private:
 
     // Handshake state.
     State _state{UNINIT};
-    int _handshake_version{0};  // 0 = unnegotiated; 2 = v2; 3 = v3
+    int _handshake_version{0};  // reserved (always v2 binary)
 
     // The URMA resources (jetty / jfc / jfr / jfce / imported peer objects).
     UrmaResource* _resource{nullptr};

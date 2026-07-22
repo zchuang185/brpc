@@ -28,8 +28,8 @@
 
 #if BRPC_WITH_URMA
 
-#include "brpc/urma/urma_api.h"
-#include "brpc/urma/urma_types.h"
+#include "urma_api.h"
+#include "urma_types.h"
 
 namespace brpc {
 namespace urma {

@@ -88,7 +88,7 @@ urma::UrmaEndpoint : public SocketUser   (urma/urma_endpoint.{h,cpp})
 1. TCP 连接建立。
 2. `UrmaConnect::StartConnect` 起客户端握手 bthread。
 3. 双方在 TCP fd 上交换 `UrmaHello` 消息（v2 二进制 magic `URMA`，
-  ，携带本地 EID、jetty id、recv buffer 数量、
+   v3 protobuf magic `URM3`），携带本地 EID、jetty id、recv buffer 数量、
    以及扁平化的 buffer 池 segment。
 4. 双方先调用 `urma_import_seg` **再**调用 `urma_import_jetty`，为远端 EID
    建立传输路径（TP）路由。跳过 `import_seg` 会导致首个 SEND 被硬件以
@@ -123,6 +123,7 @@ block 都由注册 segment 支撑，发送路径可直接从 IOBuf block refs �
 | `--urma_prepared_jetty_cnt` | 1024 | 预连接 Jetty+CQ 数量 |
 | `--urma_buffer_size` | 8192 | 池中每个 buffer 大小（字节） |
 | `--urma_buffer_count` | 65536 | 池中 buffer 数量 |
+| `--urma_client_handshake_version` | 2 | 客户端握手版本（2=二进制，3=protobuf） |
 
 ## 与 UBRing 协同
 

@@ -87,7 +87,7 @@ UrmaTransport 与 `RdmaTransport`、`UBShmTransport` 并列为第四种 `Transpo
 | `brpc::UrmaTransport` | `src/brpc/urma_transport.{h,cpp}` | `Transport` 子类；持有 `UrmaEndpoint*` + fallback `TcpTransport`；三态 `URMA_ON/OFF/UNKNOWN`；`ContextInitOrDie` 校验协议/SSL | `rdma_transport.{h,cpp}` / `ubshm_transport.{h,cpp}` |
 | `urma::UrmaEndpoint` | `src/brpc/urma/urma_endpoint.{h,cpp}` | 每连接状态机；`SocketUser` 子类；`BAIDU_CACHELINE_ALIGNMENT`；Jetty/Segment 生命周期；CQ 轮询；收发数据路径 | `rdma/rdma_endpoint.{h,cpp}` |
 | `urma::UrmaConnect : public AppConnect` | 同上 | 客户端握手驱动；`StartConnect` 起后台 bthread 跑 `ProcessHandshakeAtClient` | `RdmaConnect` / `UBConnect` |
-| `urma::UrmaHandshake` | `src/brpc/urma/urma_handshake.{h,cpp}` | v2 二进制握手（`HelloMessage` Serialize/Deserialize + `ReadFromFd`/`WriteToFd`）；`ParsedHello` 中间结构；magic `"URMA"` 分发 | `rdma/rdma_handshake.{h,cpp}` |
+| `urma::UrmaHandshake` | `src/brpc/urma/urma_handshake.{h,cpp}` | 握手策略基类 + v2/v3 子类；`ParsedHello` 中间结构；magic 分发 | `rdma/rdma_handshake.{h,cpp}` |
 | `urma::UrmaResource` | 同 endpoint | POD：`urma_jetty*`、`urma_cq*`、comp channel；预连接池 | `RdmaResource` |
 | `urma::BlockPool`（复用） | `src/brpc/rdma/block_pool.{h,cpp}` | 内存注册池；UrmaTransport 复用 RDMA 已有的 `block_pool`（URMA 底层同为 verbs 风格注册） | 现有 |
 | `urma::UrmaHelper` | `src/brpc/urma/urma_helper.{h,cpp}` | 全局初始化；`liburma` dlopen；设备/Jetty 管理 | `rdma/rdma_helper.{h,cpp}` |
@@ -245,7 +245,7 @@ endif()
 stateDiagram-v2
     [*] --> C_ALLOC_JETTY
     C_ALLOC_JETTY --> C_HELLO_SEND: AllocateResources()<br/>(从预连接池取 Jetty+CQ，或新建)
-    C_HELLO_SEND --> C_HELLO_WAIT: SendLocalHello()<br/>(发 "URMA" magic + 本地参数)
+    C_HELLO_SEND --> C_HELLO_WAIT: handshake->SendLocalHello()<br/>(发 "URMA"/"URM3" magic + 本地参数)
     C_HELLO_WAIT --> C_ACK_SEND: negotiated=true<br/>ApplyRemoteHello + BringUpJetty
     C_HELLO_WAIT --> C_ACK_SEND: negotiated=false → URMA_OFF
     C_ACK_SEND --> ESTABLISHED: URMA_ON<br/>(WriteToFd flags_be bit0=URMA_OK)
@@ -331,6 +331,7 @@ server.Start(port, &sopt);
 | `--urma_poller_yield` | false | `urma_endpoint.cpp` | 轮询循环 `bthread_yield` |
 | `--urma_disable_bthread` | false | `urma_endpoint.cpp` | 内联处理消息（不走 bthread） |
 | `--urma_trace_verbose` | false | `urma_endpoint.cpp` | 握手详细日志 |
+| `--urma_client_handshake_version` | 2 | `urma_handshake.cpp` | 握手版本（2=binary,3=protobuf） |
 | `--urma_memory_pool_initial_size_mb` | 1024 | `block_pool.cpp` | 内存池初始大小（复用） |
 | `--urma_memory_pool_max_regions` | 3 | `block_pool.cpp` | 内存池区域上限（硬上限16） |
 
@@ -358,9 +359,12 @@ src/brpc/
 │   ├── urma_endpoint.cpp
 │   ├── urma_helper.h         # 全局初始化, liburma dlopen, 设备管理
 │   ├── urma_helper.cpp
-│   ├── urma_handshake.h      # v2 二进制握手（HelloMessage + ParsedHello）
+│   ├── urma_handshake.h      # 握手策略基类 + v2/v3 子类
 │   ├── urma_handshake.cpp
+│   ├── urma_handshake.proto  # v3 protobuf 握手（参考 rdma_handshake.proto）
 │   └── mock_urma.cpp          # URMA 链接时 mock（无 liburma 时编译，供 CI 测试）
+# URMA SDK 头文件（urma_api.h/urma_types.h/urma_opcode.h）通过系统安装提供，
+# CMake find_path(URMA_INCLUDE_PATH NAMES urma_api.h) 查找，不 vendored 到代码目录
 docs/
 ├── cn/urma.md
 └── en/urma.md
@@ -400,7 +404,8 @@ test/
 6. 单测 `brpc_urma_unittest.cpp`（参考 `brpc_rdma_unittest.cpp` 与新写的 `brpc_ubring_unittest.cpp`）。
 
 ### Phase 2：性能与协同
-1. Polling 模式 + `PollerGroup` per-tag。
+1. 握手 v3（protobuf `UrmaHello`），前向兼容。
+2. Polling 模式 + `PollerGroup` per-tag。
 3. Unsignaled/solicited 完成抑制（降低 CPU）。
 4. 与 UBSHMTransport 的大小包协同文档与示例（方案 A）。
 

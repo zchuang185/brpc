@@ -41,6 +41,7 @@
 #include "urma_api.h"
 #include "brpc/urma/urma_endpoint.h"
 #include "brpc/urma/urma_handshake.h"
+#include "brpc/urma/urma_handshake.pb.h"
 #include "brpc/urma/urma_helper.h"
 #include "brpc/urma_transport.h"
 
@@ -237,6 +238,81 @@ void UrmaEndpoint::FillLocalHelloV2(v2_wire::HelloMessage* out) const {
     out->seg_va = p.seg_va;
     out->seg_len = p.seg_len;
     out->seg_token_id = p.seg_token_id;
+}
+
+void UrmaEndpoint::FillLocalHelloV3(UrmaHello* out) const {
+    ParsedHello p;
+    MakeLocalParsedHello(&p);
+    out->set_buffer_size(p.buffer_size);
+    out->set_recv_buffer_cnt(p.recv_buffer_cnt);
+    out->set_jetty_id(p.jetty_id);
+    out->set_eid(p.eid, 16);
+    out->set_uasid(p.uasid);
+    out->set_tp_type(p.tp_type);
+    out->set_seg_eid(p.seg_eid, 16);
+    out->set_seg_uasid(p.seg_uasid);
+    out->set_seg_va(p.seg_va);
+    out->set_seg_len(p.seg_len);
+    out->set_seg_token_id(p.seg_token_id);
+}
+
+int UrmaEndpoint::WriteHelloV3(const UrmaHello& msg) {
+    butil::IOBuf packet;
+    packet.append("URM3", 4);
+    std::string body;
+    if (!msg.SerializeToString(&body)) {
+        LOG(ERROR) << "Fail to serialize UrmaHello";
+        return -1;
+    }
+    uint32_t pb_size_be = butil::HostToNet32(static_cast<uint32_t>(body.size()));
+    packet.append(&pb_size_be, sizeof(pb_size_be));
+    packet.append(body);
+    return WriteToFd(packet);
+}
+
+int UrmaEndpoint::WriteToFd(butil::IOBuf& data) {
+    // Write out the IOBuf in a single WriteToFd-style loop.
+    while (!data.empty()) {
+        const timespec duetime = butil::milliseconds_from_now(WAIT_TIMEOUT_MS);
+        int fd = _socket->fd();
+        ssize_t nw = data.cut_into_file_descriptor(fd);
+        if (nw >= 0) { continue; }
+        if (errno != EAGAIN && errno != EWOULDBLOCK) { return -1; }
+        if (_socket->WaitEpollOut(fd, true, &duetime) != 0 && errno != ETIMEDOUT) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+int UrmaEndpoint::ReadAndParseHelloV3(ParsedHello* out, bool* negotiated) {
+    *negotiated = false;
+    uint32_t pb_size_be = 0;
+    if (ReadFromFd(&pb_size_be, sizeof(pb_size_be)) < 0) { return -1; }
+    uint32_t pb_size = butil::NetToHost32(pb_size_be);
+    if (pb_size == 0 || pb_size > 4096) { return 0; }
+    butil::IOPortal body;
+    if (body.append_from_file_descriptor(_socket->fd(), pb_size) !=
+        static_cast<ssize_t>(pb_size)) {
+        return -1;
+    }
+    UrmaHello msg;
+    butil::IOBufAsZeroCopyInputStream zcis(body);
+    if (!msg.ParseFromZeroCopyStream(&zcis)) { return 0; }
+    if (msg.eid().size() != 16 || msg.seg_eid().size() != 16) { return 0; }
+    out->buffer_size = msg.buffer_size();
+    out->recv_buffer_cnt = msg.recv_buffer_cnt();
+    out->jetty_id = msg.jetty_id();
+    std::memcpy(out->eid, msg.eid().data(), 16);
+    out->uasid = msg.uasid();
+    out->tp_type = static_cast<uint8_t>(msg.tp_type());
+    std::memcpy(out->seg_eid, msg.seg_eid().data(), 16);
+    out->seg_uasid = msg.seg_uasid();
+    out->seg_va = msg.seg_va();
+    out->seg_len = msg.seg_len();
+    out->seg_token_id = msg.seg_token_id();
+    *negotiated = true;
+    return 0;
 }
 
 // ============================================================================
@@ -816,7 +892,9 @@ void* UrmaEndpoint::ProcessHandshakeAtClient(void* arg) {
         return nullptr;
     }
     ep->_state = C_HELLO_SEND;
-    if (SendLocalHello(ep) < 0) {
+    std::unique_ptr<UrmaHandshake> hs(CreateClientHandshake(ep));
+    ep->_handshake_version = hs->ProtocolVersion();
+    if (hs->SendLocalHello() < 0) {
         tp->_urma_state = UrmaTransport::URMA_OFF;
         ep->_state = FALLBACK_TCP;
         return nullptr;
@@ -824,7 +902,7 @@ void* UrmaEndpoint::ProcessHandshakeAtClient(void* arg) {
     ep->_state = C_HELLO_WAIT;
     ParsedHello remote;
     bool negotiated = false;
-    if (ReceiveAndParseRemoteHello(ep, &remote, &negotiated) < 0) {
+    if (hs->ReceiveAndParseRemoteHello(&remote, &negotiated) < 0) {
         tp->_urma_state = UrmaTransport::URMA_OFF;
         ep->_state = FALLBACK_TCP;
         return nullptr;
@@ -866,17 +944,19 @@ void* UrmaEndpoint::ProcessHandshakeAtServer(void* arg) {
         ep->_state = FALLBACK_TCP;
         return nullptr;
     }
-    // Check if the magic is "URMA"; if not, fall back to TCP.
-    if (memcmp(magic, "URMA", 4) != 0) {
+    std::unique_ptr<UrmaHandshake> hs(CreateServerHandshakeByMagic(ep, magic));
+    if (!hs) {
+        // Not an URMA peer: push the magic back and fall back to TCP.
         ep->PushBackToReadBuf(magic, v2_wire::MAGIC_STR_LEN);
         tp->_urma_state = UrmaTransport::URMA_OFF;
         ep->_state = FALLBACK_TCP;
         InputMessenger::OnNewMessages(s.get());
         return nullptr;
     }
+    ep->_handshake_version = hs->ProtocolVersion();
     ParsedHello remote;
     bool negotiated = false;
-    if (ReceiveAndParseRemoteHelloServer(ep, &remote, &negotiated) < 0) {
+    if (hs->ReceiveAndParseRemoteHello(&remote, &negotiated) < 0) {
         tp->_urma_state = UrmaTransport::URMA_OFF;
         ep->_state = FALLBACK_TCP;
         return nullptr;
@@ -905,7 +985,7 @@ void* UrmaEndpoint::ProcessHandshakeAtServer(void* arg) {
         return nullptr;
     }
     ep->_state = S_HELLO_SEND;
-    if (SendLocalHello(ep) < 0) {
+    if (hs->SendLocalHello() < 0) {
         tp->_urma_state = UrmaTransport::URMA_OFF;
         ep->_state = FALLBACK_TCP;
         return nullptr;

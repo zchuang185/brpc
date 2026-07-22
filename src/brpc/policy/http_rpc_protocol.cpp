@@ -1218,6 +1218,25 @@ ParseResult ParseHttpMessage(butil::IOBuf *source, Socket *socket,
         // comments in http_message.h
         rc = http_imsg->ParseFromIOBuf(*source);
     }
+    if (rc < 0 && http_imsg->body_too_large()) {
+        if (socket->CreatedByConnect()) {
+            return MakeParseError(PARSE_ERROR_TOO_BIG_DATA);
+        }
+        const int release_rc = socket->ReleaseAdditionalReference();
+        if (release_rc == 0) {
+            butil::IOBuf resp;
+            HttpHeader header;
+            header.set_status_code(HTTP_STATUS_REQUEST_ENTITY_TOO_LARGE);
+            header.SetHeader("Connection", "close");
+            MakeRawHttpResponse(&resp, &header, NULL);
+            Socket::WriteOptions wopt;
+            wopt.ignore_eovercrowded = true;
+            socket->Write(&resp, &wopt);
+        } else if (release_rc > 0) {
+            LOG(ERROR) << "Impossible: Recycled!";
+        }
+        return MakeParseError(PARSE_ERROR_NOT_ENOUGH_DATA);
+    }
     if (http_imsg->is_stage2()) {
         // The header part is already parsed as an intact HTTP message
         // to the ProcessHttpXXX. Here parses the body part.
@@ -1388,10 +1407,12 @@ bool VerifyHttpRequest(const InputMessageBase* msg) {
         http_request->header().uri().path(), server, NULL);
     if (mp != NULL && mp->is_builtin_service &&
         mp->service->GetDescriptor() != BadMethodService::descriptor()) {
-        // BuiltinService doesn't need authentication
-        // TODO: Fix backdoor that sends BuiltinService at first
-        // and then sends other requests without authentication
-        return true;
+        // Builtin services on internal_port doesn't need authentication
+        // Builtin services on the public listener must pass authentication
+        if (server->options().internal_port >= 0 &&
+            socket->local_side().port == server->options().internal_port) {
+            return true;
+        }
     }
 
     const std::string *authorization 

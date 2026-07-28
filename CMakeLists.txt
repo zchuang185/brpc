@@ -316,7 +316,9 @@ if(WITH_URMA)
     # (src/brpc/urma/mock_urma.cpp) so CI can build and test UrmaTransport
     # on hosts without URMA hardware. The mock provides link-time stubs of
     # every urma_* symbol the transport calls.
-    find_path(URMA_INCLUDE_PATH NAMES urma/urma_api.h)
+    find_path(URMA_INCLUDE_PATH NAMES urma/urma_api.h
+              PATHS /usr/include /usr/local/include
+              PATH_SUFFIXES ub/umdk ub/umdk/urma umdk umdk/urma)
     find_library(URMA_LIB NAMES urma)
     if(URMA_INCLUDE_PATH AND URMA_LIB)
         message(STATUS "Found URMA SDK: ${URMA_INCLUDE_PATH}, ${URMA_LIB}")

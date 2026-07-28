@@ -161,6 +161,8 @@ public:
     // Write at most @len bytes from @data to the TCP fd; waits on
     // _epollout_butex on EAGAIN. Returns 0 on success, -1 on IO error.
     int WriteToFd(void* data, size_t len);
+    // Write an IOBuf to the TCP fd (used by v3 protobuf handshake).
+    int WriteToFd(butil::IOBuf& data);
 
     // ---- Hello builders/parsers (used by urma_handshake.cpp) ----
     // Fill the v2 binary HelloMessage with this endpoint's local params.

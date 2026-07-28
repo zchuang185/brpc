@@ -58,6 +58,8 @@ struct ParsedHello {
 namespace v2_wire {
 
 constexpr size_t MAGIC_STR_LEN = 4;
+constexpr size_t HELLO_BODY_LEN = 82;
+constexpr size_t HELLO_PACKET_LEN = MAGIC_STR_LEN + HELLO_BODY_LEN;  // 86
 constexpr size_t HELLO_MSG_LEN_MIN = 96;
 constexpr size_t HELLO_MSG_LEN_MAX = 4096;
 constexpr uint16_t HELLO_V2_VERSION = 2;

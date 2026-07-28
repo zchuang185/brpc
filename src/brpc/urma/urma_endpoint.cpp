@@ -198,7 +198,7 @@ int UrmaEndpoint::WriteToFd(void* data, size_t len) {
 // ============================================================================
 
 void UrmaEndpoint::MakeLocalParsedHello(ParsedHello* out) const {
-    std::memset(out, 0, sizeof(*out));
+    *out = ParsedHello{};  // value-initialize (avoids memset on non-trivial type)
     out->buffer_size = static_cast<uint32_t>(GetUrmaRecvBlockSize());
     out->recv_buffer_cnt = _rq_size - 1;
     if (_resource && _resource->jetty) {
@@ -220,8 +220,8 @@ void UrmaEndpoint::MakeLocalParsedHello(ParsedHello* out) const {
 }
 
 void UrmaEndpoint::FillLocalHelloV2(v2_wire::HelloMessage* out) const {
-    std::memset(out, 0, sizeof(*out));
-    out->msg_len = v2_wire::HELLO_PACKET_LEN;  // set below if available; else 0
+    *out = v2_wire::HelloMessage{};  // value-initialize
+    out->msg_len = v2_wire::HELLO_PACKET_LEN;
     out->hello_ver = v2_wire::HELLO_V2_VERSION;
     out->impl_ver = v2_wire::IMPL_V2_VERSION;
     ParsedHello p;
@@ -753,7 +753,7 @@ void UrmaEndpoint::PollCq(Socket* m) {
     if (s->Failed()) { return; }
 
     ssize_t bytes = 0;
-    bool last_msg = false;
+    InputMessageClosure last_msg;
     while (true) {
         int n = std::min<int>(FLAGS_urma_cqe_poll_once, 32);
         urma_cr_t crs[32];

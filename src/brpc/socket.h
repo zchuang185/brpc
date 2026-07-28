@@ -61,6 +61,14 @@ class RdmaHandshakeServerV2;
 class RdmaHandshakeClientV3;
 class RdmaHandshakeServerV3;
 }
+namespace urma {
+class UrmaEndpoint;
+class UrmaConnect;
+class UrmaHandshakeClientV2;
+class UrmaHandshakeServerV2;
+class UrmaHandshakeClientV3;
+class UrmaHandshakeServerV3;
+}
 
 class Socket;
 class AuthContext;
@@ -325,6 +333,12 @@ friend class rdma::RdmaHandshakeClientV2;
 friend class rdma::RdmaHandshakeServerV2;
 friend class rdma::RdmaHandshakeClientV3;
 friend class rdma::RdmaHandshakeServerV3;
+friend class urma::UrmaEndpoint;
+friend class urma::UrmaConnect;
+friend class urma::UrmaHandshakeClientV2;
+friend class urma::UrmaHandshakeServerV2;
+friend class urma::UrmaHandshakeClientV3;
+friend class urma::UrmaHandshakeServerV3;
 friend class HealthCheckTask;
 friend class OnAppHealthCheckDone;
 friend class HealthCheckManager;

@@ -354,6 +354,12 @@ list(APPEND BRPC_COMMON_INCLUDE_DIRS
 if(WITH_URMA AND NOT URMA_USE_MOCK)
     list(APPEND BRPC_COMMON_INCLUDE_DIRS ${URMA_INCLUDE_PATH})
 endif()
+if(WITH_URMA AND URMA_USE_MOCK)
+    # No system URMA SDK installed: use the bundled SDK headers under
+    # src/brpc/urma/sdk/ so the transport + mock can compile.
+    list(APPEND BRPC_COMMON_INCLUDE_DIRS
+        ${PROJECT_SOURCE_DIR}/src/brpc/urma/sdk)
+endif()
 
 set(DYNAMIC_LIB
     ${GFLAGS_LIBRARY}

@@ -38,7 +38,7 @@
 
 #include "brpc/input_messenger.h"
 #include "brpc/socket.h"
-#include "urma_api.h"
+#include "urma/urma_api.h"
 #include "brpc/urma/urma_endpoint.h"
 #include "brpc/urma/urma_handshake.h"
 #include "brpc/urma/urma_handshake.pb.h"

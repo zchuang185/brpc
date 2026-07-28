@@ -24,7 +24,7 @@
 
 #if BRPC_WITH_URMA
 
-#include "urma_types.h"
+#include "urma/urma_types.h"
 
 namespace brpc {
 namespace urma {

@@ -23,7 +23,7 @@
 #include <atomic>
 #endif
 
-#include "urma_opcode.h"
+#include "urma/urma_opcode.h"
 
 #ifdef __cplusplus
 extern "C" {

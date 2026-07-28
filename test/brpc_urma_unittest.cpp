@@ -22,11 +22,11 @@
 #if BRPC_WITH_URMA
 #include "butil/atomicops.h"
 #include "butil/sys_byteorder.h"
-#include "urma_api.h"
+#include "urma/urma_api.h"
 #include "brpc/urma/urma_handshake.h"
 #include "brpc/urma/urma_handshake.pb.h"
 #include "brpc/urma/urma_helper.h"
-#include "urma_types.h"
+#include "urma/urma_types.h"
 
 using namespace brpc;
 

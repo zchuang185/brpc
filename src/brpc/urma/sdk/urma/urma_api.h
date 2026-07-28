@@ -13,7 +13,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "urma_types.h"
+#include "urma/urma_types.h"
 
 #ifdef __cplusplus
 extern "C" {

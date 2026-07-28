@@ -32,7 +32,7 @@ message UrmaHello {
     required uint32 jetty_id = 3;        // local jetty id
     required bytes  eid = 4;             // 16-byte local EID (network order)
     required uint32 uasid = 5;           // local uasid
-    required uint8  tp_type = 6;         // urma_tp_type_t: URMA_RTP / URMA_CTP / URMA_UTP
+    required uint32 tp_type = 6;        // urma_tp_type_t: URMA_RTP / URMA_CTP / URMA_UTP
 
     // Flattened peer buffer-pool segment (urma_seg_t + token). The receiver
     // calls urma_import_seg with these fields BEFORE urma_import_jetty, so

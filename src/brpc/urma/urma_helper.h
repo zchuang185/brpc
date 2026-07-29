@@ -32,6 +32,8 @@
 #include "urma/urma_types.h"
 
 namespace brpc {
+DECLARE_bool(usercode_in_coroutine);
+DECLARE_bool(usercode_in_pthread);
 namespace urma {
 
 // Initialize the URMA environment.

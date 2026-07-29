@@ -349,6 +349,7 @@ friend void DereferenceSocket(Socket*);
 friend class Transport;
 friend class TcpTransport;
 friend class RdmaTransport;
+friend class UrmaTransport;
 friend class TransportFactory;
     class SharedPart;
     struct WriteRequest;

@@ -48,13 +48,14 @@ static void* worker(void* arg) {
         static_cast<test::PerfTestService_Stub*>(arg);
     int qps = FLAGS_expected_qps;
     while (!brpc::IsAskedToQuit()) {
-        butil::FastRand fr;
+        butil::FastRandSeed seed;
+        butil::init_fast_rand_seed(&seed);
         std::vector<brpc::Controller> cntls(FLAGS_queue_depth);
         std::vector<test::PerfTestRequest> reqs(FLAGS_queue_depth);
         std::vector<test::PerfTestResponse> resps(FLAGS_queue_depth);
         std::vector<brpc::CallId> ids(FLAGS_queue_depth);
         for (int i = 0; i < FLAGS_queue_depth; ++i) {
-            cntls[i].set_log_id(fr.next() & 0x7fffffff);
+            cntls[i].set_log_id(butil::fast_rand() & 0x7fffffff);
             reqs[i].set_echo_attachment(FLAGS_echo_attachment);
             if (FLAGS_attachment_size >= 0) {
                 cntls[i].request_attachment().resize(FLAGS_attachment_size, 'a');

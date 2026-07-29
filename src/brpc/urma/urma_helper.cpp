@@ -76,7 +76,7 @@ DEFINE_bool(urma_recv_zerocopy, true,
 DEFINE_int32(urma_zerocopy_min_size, 512,
              "Receives smaller than this many bytes are copied (not zero-copy)");
 
-DEFINE_string(urma_device, "",
+DEFINE_string(urma_device, "bonding_dev_0",
               "The name of the URMA device to use. Empty means the first one.");
 DEFINE_int32(urma_max_sge, 0,
               "Max SGEs per WR. 0 means the device maximum.");
@@ -524,7 +524,7 @@ uint32_t RegisterMemoryForUrma(void* buf, size_t len) {
         urma_unregister_seg(tseg);
         return 0;
     }
-    return reinterpret_cast<uint32_t>(reinterpret_cast<uintptr_t>(tseg));
+    return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(tseg));
 }
 
 void DeregisterMemoryForUrma(void* buf) {
@@ -542,7 +542,7 @@ uint32_t GetSegHandle(void* buf) {
         auto* base = static_cast<char*>(g_pool_base);
         auto* p = static_cast<char*>(buf);
         if (p >= base && p < base + g_pool_size) {
-            return reinterpret_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_pool_seg));
+            return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_pool_seg));
         }
     }
     // User-registered buffer?
@@ -553,7 +553,7 @@ uint32_t GetSegHandle(void* buf) {
             auto* b = static_cast<char*>(it->second.base);
             auto* p = static_cast<char*>(buf);
             if (p >= b && p < b + it->second.len) {
-                return reinterpret_cast<uint32_t>(
+                return static_cast<uint32_t>(
                     reinterpret_cast<uintptr_t>(it->second.tseg));
             }
         }

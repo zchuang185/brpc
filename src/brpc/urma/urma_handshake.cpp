@@ -68,9 +68,6 @@ DEFINE_int32(urma_client_handshake_version, 2,
 
 namespace v2_wire {
 
-constexpr size_t HELLO_BODY_LEN = 82;
-constexpr size_t HELLO_PACKET_LEN = MAGIC_STR_LEN + HELLO_BODY_LEN;  // 86
-
 void HelloMessage::Serialize(void* buf) const {
     uint8_t* p = static_cast<uint8_t*>(buf);
     *(uint16_t*)p = butil::HostToNet16(msg_len);          p += 2;

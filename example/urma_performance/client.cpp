@@ -38,7 +38,7 @@ DEFINE_int32(queue_depth, 1, "How many requests can be pending in the queue");
 DEFINE_int32(expected_qps, 0, "The expected QPS");
 DEFINE_int32(max_thread_num, 16, "The max number of threads are used");
 DEFINE_int32(attachment_size, -1, "Attachment size is used (in Bytes)");
-DEFINE_int32(rpc_timeout_ms, 1000, "Timeout for each RPC in milliseconds");
+DEFINE_int32(rpc_timeout_ms, 5000, "Timeout for each RPC in milliseconds");
 DEFINE_bool(echo_attachment, false, "Select whether attachment should be echo");
 DEFINE_bool(use_urma, true, "Use URMA transport (true) or TCP (false)");
 
@@ -106,7 +106,9 @@ int main(int argc, char* argv[]) {
     warmup_req.set_echo_attachment(false);
     stub.Test(&warmup_cntl, &warmup_req, &warmup_resp, nullptr);
     if (warmup_cntl.Failed()) {
-        LOG(ERROR) << "Warm-up RPC failed: " << warmup_cntl.ErrorText();
+        LOG(ERROR) << "Warm-up RPC failed after timeout_ms="
+                   << FLAGS_rpc_timeout_ms << ": "
+                   << warmup_cntl.ErrorText();
         return -1;
     }
     LOG(INFO) << "Warm-up RPC to " << FLAGS_server
@@ -126,7 +128,8 @@ int main(int argc, char* argv[]) {
     }
     LOG(INFO) << "URMA performance client started (server=" << FLAGS_server
               << ", use_urma=" << FLAGS_use_urma
-              << ", threads=" << thread_num << ")";
+              << ", threads=" << thread_num
+              << ", rpc_timeout_ms=" << FLAGS_rpc_timeout_ms << ")";
     while (!brpc::IsAskedToQuit()) {
         sleep(1);
         LOG(INFO) << "qps=" << g_latency.qps(1)

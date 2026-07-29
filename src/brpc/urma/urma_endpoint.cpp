@@ -571,6 +571,21 @@ int UrmaEndpoint::ImportPeer(const ParsedHello& peer) {
                     << " bonding_extension=" << use_bonding_extension;
         return -1;
     }
+    LOG_IF(INFO, FLAGS_urma_trace_verbose)
+        << "URMA peer import details: bonding=" << use_bonding_extension
+        << " local_jetty_id=" << _resource->jetty->jetty_id.id
+        << " remote_jetty_id=" << _resource->remote_jetty->id.id
+        << " remote_handle=" << _resource->remote_jetty->handle
+        << " local_associated_remote="
+        << static_cast<const void*>(_resource->jetty->remote_jetty)
+        << " imported_remote="
+        << static_cast<const void*>(_resource->remote_jetty)
+        << " association_matches="
+        << (_resource->jetty->remote_jetty == _resource->remote_jetty)
+        << " trans_mode=" << _resource->remote_jetty->trans_mode
+        << " tp_type=" << _resource->remote_jetty->tp_type
+        << " state=" << GetStateStr()
+        << " on " << _socket->description();
     return 0;
 }
 
@@ -666,29 +681,81 @@ ssize_t UrmaEndpoint::CutFromIOBufList(butil::IOBuf** from, size_t ndata) {
         urma_sg_t sg{sglist, static_cast<uint32_t>(sge_index)};
         urma_jfs_wr_t wr{};
         std::memset(&wr, 0, sizeof(wr));
-        const uint32_t ack =
-            _new_rq_wrs.exchange(0, butil::memory_order_relaxed);
-        wr.opcode = URMA_OPC_SEND_IMM;
+        // Match yalantinglibs' payload path: normal data is sent with
+        // URMA_OPC_SEND. Receive credits are flushed separately by SendImm()
+        // after SendAck() reaches its threshold. Piggybacking credits turns
+        // every payload into SEND_IMM and has shown asymmetric completion
+        // behavior with the bonding provider.
+        const uint32_t pending_ack =
+            _new_rq_wrs.load(butil::memory_order_relaxed);
+        wr.opcode = URMA_OPC_SEND;
         wr.flag.bs.complete_enable = 1;
-        wr.flag.bs.solicited_enable = 1;
         wr.tjetty = _resource->remote_jetty;
         wr.send.src = sg;
-        wr.send.imm_data = ack;
         wr.user_ctx = 1;
         urma_jfs_wr_t* bad_wr = nullptr;
+        const uint16_t sq_slot = _sq_current;
+        const uint32_t local_jetty_id = _resource->jetty->jetty_id.id;
+        const uint32_t remote_jetty_id = _resource->remote_jetty->id.id;
+        const bool association_matches =
+            _resource->jetty->remote_jetty == _resource->remote_jetty;
+        LOG_IF(WARNING,
+               FLAGS_urma_trace_verbose && IsUrmaBondingDevice() &&
+                   _state.load(butil::memory_order_acquire) != ESTABLISHED)
+            << "URMA bonding SEND is being posted before handshake "
+               "establishment: state="
+            << GetStateStr() << " sq_slot=" << sq_slot
+            << " payload_size=" << this_len
+            << " local_jetty_id=" << local_jetty_id
+            << " remote_jetty_id=" << remote_jetty_id
+            << " on " << _socket->description();
+        LOG_IF(INFO, FLAGS_urma_trace_verbose)
+            << "URMA posting SEND: sq_slot=" << sq_slot
+            << " opcode=" << static_cast<int>(wr.opcode)
+            << " payload_size=" << this_len
+            << " num_sge=" << sge_index
+            << " pending_ack=" << pending_ack
+            << " local_jetty_id=" << local_jetty_id
+            << " remote_jetty_id=" << remote_jetty_id
+            << " association_matches=" << association_matches
+            << " state=" << GetStateStr()
+            << " sq_window=" << sq_wnd
+            << " remote_rq_window=" << remote_wnd
+            << " on " << _socket->description();
         int rc = urma_post_jetty_send_wr(_resource->jetty, &wr, &bad_wr);
         if (rc != URMA_SUCCESS) {
-            _new_rq_wrs.fetch_add(ack, butil::memory_order_relaxed);
+            const int provider_errno = errno;
             LOG(WARNING) << "urma_post_jetty_send_wr failed: " << rc
+                         << ", provider_errno=" << provider_errno
+                         << " (" << berror(provider_errno) << ')'
+                         << ", bad_wr=" << static_cast<const void*>(bad_wr)
+                         << ", bad_is_current=" << (bad_wr == &wr)
+                         << ", sq_slot=" << sq_slot
+                         << ", local_jetty_id=" << local_jetty_id
+                         << ", remote_jetty_id=" << remote_jetty_id
+                         << ", association_matches=" << association_matches
+                         << ", state=" << GetStateStr()
+                         << ", sq_window=" << sq_wnd
+                         << ", remote_rq_window=" << remote_wnd
                          << ", num_sge=" << sge_index
                          << ", configured_max_sge=" << GetUrmaMaxSge()
-                         << ", payload_size=" << this_len;
+                         << ", payload_size=" << this_len
+                         << " on " << _socket->description();
             errno = rc;
             return -1;
         }
         LOG_IF(INFO, FLAGS_urma_trace_verbose)
-            << "URMA posted SEND: payload_size=" << this_len
-            << " num_sge=" << sge_index << " ack=" << ack
+            << "URMA posted SEND: sq_slot=" << sq_slot
+            << " payload_size=" << this_len
+            << " num_sge=" << sge_index
+            << " opcode=" << static_cast<int>(wr.opcode)
+            << " pending_ack=" << pending_ack
+            << " local_jetty_id=" << local_jetty_id
+            << " remote_jetty_id=" << remote_jetty_id
+            << " association_matches=" << association_matches
+            << " state=" << GetStateStr()
+            << " sq_window_after=" << (sq_wnd - 1)
+            << " remote_rq_window_after=" << (remote_wnd - 1)
             << " on " << _socket->description();
         _sq_current = (_sq_current + 1) % (_sq_size - RESERVED_WR_NUM);
         _remote_rq_window_size.fetch_sub(1, butil::memory_order_relaxed);
@@ -724,7 +791,15 @@ int UrmaEndpoint::DoPostRecv(void* block, size_t block_size) {
             : urma_post_jfr_wr(_resource->jfr, &wr, &bad);
     if (status != URMA_SUCCESS) {
         LOG(WARNING) << "Failed to post URMA receive WR: status=" << status
-                     << " bonding=" << IsUrmaBondingDevice();
+                     << " bonding=" << IsUrmaBondingDevice()
+                     << " bad_wr=" << static_cast<const void*>(bad)
+                     << " bad_is_current=" << (bad == &wr)
+                     << " local_jetty_id=" << _resource->jetty->jetty_id.id
+                     << " associated_remote="
+                     << static_cast<const void*>(
+                            _resource->jetty->remote_jetty)
+                     << " state=" << GetStateStr()
+                     << " on " << _socket->description();
         errno = status;
         return -1;
     }
@@ -732,6 +807,7 @@ int UrmaEndpoint::DoPostRecv(void* block, size_t block_size) {
 }
 
 int UrmaEndpoint::PostRecv(uint32_t num, bool zerocopy) {
+    const uint16_t first_rq_slot = _rq_received;
     for (uint32_t i = 0; i < num; ++i) {
         size_t block_size = GetUrmaRecvBlockSize();
         if (zerocopy) {
@@ -768,6 +844,20 @@ int UrmaEndpoint::PostRecv(uint32_t num, bool zerocopy) {
         }
         _rq_received = (_rq_received + 1) % _rq_size;
     }
+    LOG_IF(INFO, FLAGS_urma_trace_verbose)
+        << "URMA posted RECV: count=" << num
+        << " first_rq_slot=" << first_rq_slot
+        << " next_rq_slot=" << _rq_received
+        << " block_size=" << GetUrmaRecvBlockSize()
+        << " zerocopy=" << zerocopy
+        << " api="
+        << (IsUrmaBondingDevice() ? "urma_post_jetty_recv_wr"
+                                  : "urma_post_jfr_wr")
+        << " local_jetty_id=" << _resource->jetty->jetty_id.id
+        << " associated_remote="
+        << static_cast<const void*>(_resource->jetty->remote_jetty)
+        << " state=" << GetStateStr()
+        << " on " << _socket->description();
     return 0;
 }
 
@@ -787,10 +877,32 @@ int UrmaEndpoint::SendImm(uint32_t imm) {
     wr.send.imm_data = imm;
     wr.user_ctx = 0;  // 0 == pure ack (HandleCompletion reuses budget).
     urma_jfs_wr_t* bad = nullptr;
-    if (urma_post_jetty_send_wr(_resource->jetty, &wr, &bad) != URMA_SUCCESS) {
+    const urma_status_t status =
+        urma_post_jetty_send_wr(_resource->jetty, &wr, &bad);
+    if (status != URMA_SUCCESS) {
+        const int provider_errno = errno;
         _new_rq_wrs.fetch_add(imm, butil::memory_order_relaxed);
+        LOG(WARNING) << "Failed to post URMA credit ACK: status=" << status
+                     << " provider_errno=" << provider_errno
+                     << " (" << berror(provider_errno) << ')'
+                     << " bad_wr=" << static_cast<const void*>(bad)
+                     << " bad_is_current=" << (bad == &wr)
+                     << " imm=" << imm
+                     << " local_jetty_id="
+                     << _resource->jetty->jetty_id.id
+                     << " remote_jetty_id="
+                     << _resource->remote_jetty->id.id
+                     << " state=" << GetStateStr()
+                     << " on " << _socket->description();
+        errno = status;
         return -1;
     }
+    LOG_IF(INFO, FLAGS_urma_trace_verbose)
+        << "URMA posted credit ACK: imm=" << imm
+        << " local_jetty_id=" << _resource->jetty->jetty_id.id
+        << " remote_jetty_id=" << _resource->remote_jetty->id.id
+        << " state=" << GetStateStr()
+        << " on " << _socket->description();
     if (_sq_imm_window_size > 0) { --_sq_imm_window_size; }
     return 0;
 }
@@ -815,6 +927,15 @@ ssize_t UrmaEndpoint::HandleCompletion(const urma_cr_t& cr) {
         << " length=" << cr.completion_len
         << " imm=" << (cr.flag.bs.s_r ? cr.imm_data : 0)
         << " user_ctx=" << cr.user_ctx
+        << " local_id=" << cr.local_id
+        << " remote_id=" << (cr.flag.bs.s_r ? cr.remote_id.id : 0)
+        << " tpn=" << cr.tpn
+        << " provider_user_data=" << cr.user_data
+        << " state=" << GetStateStr()
+        << " sq_window="
+        << _sq_window_size.load(butil::memory_order_relaxed)
+        << " remote_rq_window="
+        << _remote_rq_window_size.load(butil::memory_order_relaxed)
         << " on " << _socket->description();
     if (cr.status != URMA_CR_SUCCESS) {
         LOG(WARNING) << "URMA completion failed, status=" << cr.status;
@@ -920,7 +1041,8 @@ void UrmaEndpoint::PollCq(Socket* m) {
         if (cnt == 0) { break; }
         LOG_IF(INFO, FLAGS_urma_trace_verbose)
             << "URMA polled " << cnt << " completion(s) on "
-            << s->description();
+            << s->description()
+            << " state=" << ep->GetStateStr();
         for (int i = 0; i < cnt; ++i) {
             if (s->Failed()) {
                 completion_error = ECANCELED;
@@ -962,6 +1084,7 @@ void UrmaEndpoint::PollCq(Socket* m) {
             LOG_IF(INFO, FLAGS_urma_trace_verbose)
                 << "URMA dispatched " << bytes
                 << " byte(s) to InputMessenger, rc=" << rc
+                << " state=" << ep->GetStateStr()
                 << " on " << s->description();
         } else {
             LOG(ERROR) << "URMA socket has no InputMessenger: "

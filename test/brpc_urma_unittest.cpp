@@ -385,7 +385,7 @@ TEST_F(UrmaMockTest, post_and_poll_completion) {
     urma_free_device_list(devices);
 }
 
-TEST_F(UrmaMockTest, paired_send_moves_payload_and_immediate_credit) {
+TEST_F(UrmaMockTest, paired_send_separates_payload_and_immediate_credit) {
     int num_devices = 0;
     urma_device_t** devices = urma_get_device_list(&num_devices);
     ASSERT_NE(nullptr, devices);
@@ -456,6 +456,13 @@ TEST_F(UrmaMockTest, paired_send_moves_payload_and_immediate_credit) {
         nullptr};
     urma_sg_t recv_sg{&recv_sge, 1};
     urma_jfr_wr_t recv_wr{recv_sg, 99, nullptr};
+    char credit_recv_buf[1]{};
+    urma_sge_t credit_recv_sge{
+        reinterpret_cast<uint64_t>(credit_recv_buf),
+        sizeof(credit_recv_buf), nullptr, nullptr};
+    urma_sg_t credit_recv_sg{&credit_recv_sge, 1};
+    urma_jfr_wr_t credit_recv_wr{credit_recv_sg, 100, nullptr};
+    recv_wr.next = &credit_recv_wr;
     urma_jfr_wr_t* bad_recv = nullptr;
     ASSERT_EQ(URMA_SUCCESS,
               urma_post_jfr_wr(receiver_jfr, &recv_wr, &bad_recv));
@@ -466,28 +473,40 @@ TEST_F(UrmaMockTest, paired_send_moves_payload_and_immediate_credit) {
         nullptr};
     urma_sg_t send_sg{&send_sge, 1};
     urma_jfs_wr_t send_wr{};
-    send_wr.opcode = URMA_OPC_SEND_IMM;
+    send_wr.opcode = URMA_OPC_SEND;
     send_wr.flag.bs.complete_enable = 1;
     send_wr.tjetty = target;
     send_wr.user_ctx = 7;
     send_wr.send.src = send_sg;
-    send_wr.send.imm_data = 13;
+    urma_jfs_wr_t credit_wr{};
+    credit_wr.opcode = URMA_OPC_SEND_IMM;
+    credit_wr.flag.bs.complete_enable = 1;
+    credit_wr.tjetty = target;
+    credit_wr.user_ctx = 8;
+    credit_wr.send.imm_data = 13;
+    send_wr.next = &credit_wr;
     urma_jfs_wr_t* bad_send = nullptr;
     ASSERT_EQ(URMA_SUCCESS,
               urma_post_jetty_send_wr(sender, &send_wr, &bad_send));
 
-    urma_cr_t sender_cr{};
-    ASSERT_EQ(1, urma_poll_jfc(sender_jfc, 1, &sender_cr));
-    EXPECT_EQ(0, sender_cr.flag.bs.s_r);
-    EXPECT_EQ(7u, sender_cr.user_ctx);
+    urma_cr_t sender_cr[2]{};
+    ASSERT_EQ(2, urma_poll_jfc(sender_jfc, 2, sender_cr));
+    EXPECT_EQ(0, sender_cr[0].flag.bs.s_r);
+    EXPECT_EQ(7u, sender_cr[0].user_ctx);
+    EXPECT_EQ(0, sender_cr[1].flag.bs.s_r);
+    EXPECT_EQ(8u, sender_cr[1].user_ctx);
 
-    urma_cr_t receiver_cr{};
-    ASSERT_EQ(1, urma_poll_jfc(receiver_jfc, 1, &receiver_cr));
-    EXPECT_EQ(1, receiver_cr.flag.bs.s_r);
-    EXPECT_EQ(URMA_CR_OPC_SEND_WITH_IMM, receiver_cr.opcode);
-    EXPECT_EQ(13u, receiver_cr.imm_data);
-    EXPECT_EQ(sizeof(payload), receiver_cr.completion_len);
+    urma_cr_t receiver_cr[2]{};
+    ASSERT_EQ(2, urma_poll_jfc(receiver_jfc, 2, receiver_cr));
+    EXPECT_EQ(1, receiver_cr[0].flag.bs.s_r);
+    EXPECT_EQ(URMA_CR_OPC_SEND, receiver_cr[0].opcode);
+    EXPECT_EQ(0u, receiver_cr[0].imm_data);
+    EXPECT_EQ(sizeof(payload), receiver_cr[0].completion_len);
     EXPECT_EQ(0, memcmp(payload, recv_buf, sizeof(payload)));
+    EXPECT_EQ(1, receiver_cr[1].flag.bs.s_r);
+    EXPECT_EQ(URMA_CR_OPC_SEND_WITH_IMM, receiver_cr[1].opcode);
+    EXPECT_EQ(13u, receiver_cr[1].imm_data);
+    EXPECT_EQ(0u, receiver_cr[1].completion_len);
 
     urma_unimport_jetty(target);
     urma_delete_jetty(receiver);

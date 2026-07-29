@@ -224,8 +224,8 @@ private:
     // Send a pure-ACK URMA_OPC_SEND_IMM WR with no payload. @imm carries the
     // number of receive WRs reposted for peer-side flow-control credit.
     int SendImm(uint32_t imm);
-    // Piggyback ack: if _new_rq_wrs is above the threshold, flush it via
-    // SendImm. @num is the number of new recv WRs to add.
+    // Batched credit ack: if _new_rq_wrs is above the threshold, flush it via
+    // a standalone SendImm. @num is the number of new recv WRs to add.
     int SendAck(int num);
 
     // Handle one completion record. For SEND completions: reclaim the SQ
@@ -300,7 +300,7 @@ private:
     // RQ consumer index.
     uint16_t _rq_received{0};
 
-    // ACK piggyback counters.
+    // Batched receive-credit ACK counters.
     uint16_t _accumulated_ack{0};
     uint16_t _unsolicited{0};
     uint32_t _unsolicited_bytes{0};

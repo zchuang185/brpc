@@ -1,0 +1,52 @@
+{
+  "mock_urma.cpp": {
+    "mtime": 1785291503.4057467,
+    "ast_hash": "807946403b95d9ffeba42b3f5ebfd7c7",
+    "semantic_hash": "807946403b95d9ffeba42b3f5ebfd7c7"
+  },
+  "sdk/urma/urma_api.h": {
+    "mtime": 1785227626.4640763,
+    "ast_hash": "863fa78e87e6c2cf060e57aba182b5ec",
+    "semantic_hash": "863fa78e87e6c2cf060e57aba182b5ec"
+  },
+  "sdk/urma/urma_opcode.h": {
+    "mtime": 1785226861.7041552,
+    "ast_hash": "4d3ccd0716c7d37af65185809ca9deba",
+    "semantic_hash": "4d3ccd0716c7d37af65185809ca9deba"
+  },
+  "sdk/urma/urma_types.h": {
+    "mtime": 1785227626.5065477,
+    "ast_hash": "5670d4c6bf1dcfe06d470f713aba6ac0",
+    "semantic_hash": "5670d4c6bf1dcfe06d470f713aba6ac0"
+  },
+  "urma_endpoint.cpp": {
+    "mtime": 1785309099.9902904,
+    "ast_hash": "cd2c96ab882dc8e8a535dc70add2ef81",
+    "semantic_hash": "cd2c96ab882dc8e8a535dc70add2ef81"
+  },
+  "urma_endpoint.h": {
+    "mtime": 1785309036.5279553,
+    "ast_hash": "a6ac6cfe89074744f21ac1d0d3369077",
+    "semantic_hash": "a6ac6cfe89074744f21ac1d0d3369077"
+  },
+  "urma_handshake.cpp": {
+    "mtime": 1785291857.3837256,
+    "ast_hash": "eb7077067c00151dbe2879894cf68e85",
+    "semantic_hash": "eb7077067c00151dbe2879894cf68e85"
+  },
+  "urma_handshake.h": {
+    "mtime": 1785291144.2091112,
+    "ast_hash": "5ed41efa6c47b34afbeacf646d4c4752",
+    "semantic_hash": "5ed41efa6c47b34afbeacf646d4c4752"
+  },
+  "urma_helper.cpp": {
+    "mtime": 1785307850.78223,
+    "ast_hash": "c50ea7e6c9e5a1585fe836d0ac6a3f46",
+    "semantic_hash": "c50ea7e6c9e5a1585fe836d0ac6a3f46"
+  },
+  "urma_helper.h": {
+    "mtime": 1785290825.5598035,
+    "ast_hash": "f2c8cf5ed5743992b36e4be9e28750bf",
+    "semantic_hash": "f2c8cf5ed5743992b36e4be9e28750bf"
+  }
+}

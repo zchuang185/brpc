@@ -67,6 +67,9 @@ uint64_t GetSegHandle(void* buf);
 // device / EID). Returns NULL if URMA is not initialized.
 urma_context_t* GetUrmaContext();
 
+// Return true when the selected URMA device is a bonding provider device.
+bool IsUrmaBondingDevice();
+
 // If the URMA environment is available.
 bool IsUrmaAvailable();
 

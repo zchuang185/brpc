@@ -20,6 +20,7 @@
 #if BRPC_WITH_URMA
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <iostream>
 #include <memory>
@@ -44,6 +45,7 @@
 #include "brpc/input_messenger.h"
 #include "brpc/socket.h"
 #include "urma/urma_api.h"
+#include "brpc/urma/urma_bonding.h"
 #include "brpc/urma/urma_endpoint.h"
 #include "brpc/urma/urma_handshake.h"
 #include "brpc/urma/urma_handshake.pb.h"
@@ -529,9 +531,48 @@ int UrmaEndpoint::ImportPeer(const ParsedHello& peer) {
     remote.tp_type = static_cast<urma_tp_type_t>(peer.tp_type);
 
     urma_token_t token{};
+    errno = 0;
     _resource->remote_jetty = urma_import_jetty(ctx, &remote, &token);
+    const int plain_import_errno = errno;
+    bool used_bonding_extension = false;
+    if (!_resource->remote_jetty && IsUrmaBondingDevice() &&
+        remote.trans_mode == URMA_TM_RM) {
+#if BRPC_URMA_HAS_BONDING_EXT
+        LOG(WARNING) << "Plain urma_import_jetty failed: errno="
+                     << plain_import_errno
+                     << ", retrying with bonding extension";
+        bondp_rjetty_t bonding_remote{};
+        bonding_remote.base = remote;
+        bonding_remote.base.flag.bs.has_drv_ext = 1;
+        bonding_remote.jetty = _resource->jetty;
+        errno = 0;
+        _resource->remote_jetty =
+            urma_import_jetty(ctx, &bonding_remote.base, &token);
+        used_bonding_extension = true;
+        if (_resource->remote_jetty) {
+            LOG(INFO) << "URMA bonding remote jetty import succeeded"
+                      << " remote_jetty_id=" << peer.jetty_id;
+        }
+#else
+        LOG(ERROR) << "Bonding remote jetty import requires provider header "
+                      "urma/urma_ubagg.h";
+        errno = ENOTSUP;
+#endif
+    }
     if (!_resource->remote_jetty) {
-        PLOG(ERROR) << "urma_import_jetty failed";
+        if (errno == 0) {
+            errno = plain_import_errno != 0 ? plain_import_errno : EIO;
+        }
+        char remote_eid[URMA_EID_STR_LEN + 1] = {};
+        std::snprintf(remote_eid, sizeof(remote_eid), EID_FMT,
+                      EID_RAW_ARGS(peer.eid));
+        PLOG(ERROR) << "urma_import_jetty failed"
+                    << " remote_eid=" << remote_eid
+                    << " remote_uasid=" << peer.uasid
+                    << " remote_jetty_id=" << peer.jetty_id
+                    << " trans_mode=" << remote.trans_mode
+                    << " tp_type=" << remote.tp_type
+                    << " bonding_extension=" << used_bonding_extension;
         return -1;
     }
     return 0;

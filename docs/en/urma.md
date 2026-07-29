@@ -127,10 +127,18 @@ All flags use the `urma_` prefix (mirroring RDMA's `rdma_` prefix):
 | `--urma_zerocopy_min_size` | 512 | Receives smaller than this are copied |
 | `--urma_device` | "" | URMA device name (empty = first) |
 | `--urma_max_sge` | 0 | Max SGEs per WR (0 = device max) |
+| `--urma_bonding_mode` | 0 | Bonding mode: 0=standalone, 1=active-backup, 2=balance |
+| `--urma_bonding_level` | 0 | Bonding level: 0=IODIE, 1=port |
 | `--urma_prepared_jetty_cnt` | 8 | Requested pre-allocated Jetty+CQ sets; automatically capped according to `RLIMIT_NOFILE` |
 | `--urma_buffer_size` | 8192 | Per-buffer size in the pool (bytes) |
 | `--urma_buffer_count` | 65536 | Number of buffers in the pool |
 | `--urma_client_handshake_version` | 2 | Client wire version (2=binary, 3=protobuf) |
+
+For a device whose name starts with `bonding`, brpc configures the provider
+immediately after context creation and before creating segments or queues.
+The default standalone+IODIE combination matches the UMDK performance tool.
+Bonding support requires the provider extension header
+`urma/urma_ubagg.h`.
 
 ## Coexistence with UBRing
 

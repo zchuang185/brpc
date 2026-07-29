@@ -43,6 +43,7 @@
 
 #include "urma/urma_api.h"
 #include "urma/urma_types.h"
+#include "brpc/urma/urma_bonding.h"
 #include "brpc/urma/urma_endpoint.h"
 
 DECLARE_int32(task_group_ntags);
@@ -82,6 +83,11 @@ DEFINE_string(urma_device, "",
               "The name of the URMA device to use. Empty means the first one.");
 DEFINE_int32(urma_max_sge, 0,
               "Max SGEs per WR. 0 means the device maximum.");
+DEFINE_int32(urma_bonding_mode, 0,
+              "Bonding mode for bonding devices: 0=standalone, "
+              "1=active-backup, 2=balance.");
+DEFINE_int32(urma_bonding_level, 0,
+              "Bonding level for bonding devices: 0=IODIE, 1=port.");
 DEFINE_int32(urma_prepared_jetty_cnt, 8,
               "Requested number of pre-allocated Jetty+CQ sets for fast "
               "connect; capped automatically according to RLIMIT_NOFILE");
@@ -122,6 +128,7 @@ static urma_context_t* g_context = nullptr;
 static urma_device_attr_t g_device_attr{};
 static int g_max_sge = 1;
 static size_t g_recv_block_size = 8 * 1024;
+static bool g_is_bonding_device = false;
 // urma_init/urma_uninit manage process-global liburma state. Only uninitialize
 // it when this helper performed the successful initialization; URMA_EEXIST
 // means another component owns that state.
@@ -159,6 +166,57 @@ size_t PageSize() {
 
 size_t AlignUp(size_t v, size_t align) {
     return (v + align - 1) / align * align;
+}
+
+bool ConfigureBondingMode(const std::string& device_name) {
+    if (device_name.compare(0, 7, "bonding") != 0) {
+        return true;
+    }
+    g_is_bonding_device = true;
+
+#if BRPC_URMA_HAS_BONDING_EXT
+    if (FLAGS_urma_bonding_mode < 0 ||
+        FLAGS_urma_bonding_mode >= BONDP_BONDING_MODE_MAX ||
+        FLAGS_urma_bonding_level < 0 ||
+        FLAGS_urma_bonding_level >= BONDP_BONDING_LEVEL_MAX) {
+        LOG(ERROR) << "Invalid URMA bonding configuration: mode="
+                   << FLAGS_urma_bonding_mode
+                   << " level=" << FLAGS_urma_bonding_level;
+        errno = EINVAL;
+        return false;
+    }
+
+    bondp_set_bonding_mode_in_t bond_in{};
+    bond_in.bonding_mode =
+        static_cast<bondp_bonding_mode_t>(FLAGS_urma_bonding_mode);
+    bond_in.bonding_level =
+        static_cast<bondp_bonding_level_t>(FLAGS_urma_bonding_level);
+
+    urma_user_ctl_in_t ctl_in{};
+    ctl_in.addr = reinterpret_cast<uint64_t>(&bond_in);
+    ctl_in.len = static_cast<uint32_t>(sizeof(bond_in));
+    ctl_in.opcode = BONDP_USER_CTL_SET_BONDING_MODE;
+    urma_user_ctl_out_t ctl_out{};
+    const urma_status_t status = urma_user_ctl(g_context, &ctl_in, &ctl_out);
+    if (status != URMA_SUCCESS) {
+        LOG(ERROR) << "urma_user_ctl(SET_BONDING_MODE) failed: status="
+                   << status << " device=" << device_name
+                   << " mode=" << FLAGS_urma_bonding_mode
+                   << " level=" << FLAGS_urma_bonding_level
+                   << ". It must run before segment/JFC/JFR creation";
+        errno = status > 0 ? status : EIO;
+        return false;
+    }
+    LOG(INFO) << "URMA bonding mode configured: device=" << device_name
+              << " mode=" << FLAGS_urma_bonding_mode
+              << " level=" << FLAGS_urma_bonding_level;
+    return true;
+#else
+    LOG(ERROR) << "URMA bonding device " << device_name
+               << " requires provider header urma/urma_ubagg.h";
+    errno = ENOTSUP;
+    return false;
+#endif
 }
 
 }  // namespace
@@ -355,6 +413,7 @@ static void GlobalRelease() {
         urma_delete_context(g_context);
         g_context = nullptr;
     }
+    g_is_bonding_device = false;
     if (g_owns_urma_init) {
         const urma_status_t status = urma_uninit();
         if (status != URMA_SUCCESS) {
@@ -445,6 +504,11 @@ static bool GlobalUrmaInitializeImpl() {
     g_device = nullptr;
     if (!g_context) {
         LOG(ERROR) << "Fail to urma_create_context";
+        return false;
+    }
+    // The bonding provider only accepts SET_BONDING_MODE while the context
+    // has no dependent resource. This must precede register_seg/JFC/JFR.
+    if (!ConfigureBondingMode(device_name)) {
         return false;
     }
     uint32_t device_max_sge = g_device_attr.dev_cap.max_jfs_sge;
@@ -550,6 +614,7 @@ bool SupportedByUrma(std::string protocol) {
 }
 
 urma_context_t* GetUrmaContext() { return g_context; }
+bool IsUrmaBondingDevice() { return g_is_bonding_device; }
 int GetUrmaMaxSge() { return g_max_sge; }
 size_t GetUrmaRecvBlockSize() { return g_recv_block_size; }
 

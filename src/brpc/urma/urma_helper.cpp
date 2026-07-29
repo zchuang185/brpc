@@ -503,7 +503,11 @@ static bool GlobalUrmaInitializeImpl() {
     }
 
     g_urma_available.store(true, butil::memory_order_release);
-    atexit(GlobalRelease);
+    // Do not register GlobalRelease with atexit. IOBuf keeps blocks in
+    // thread-local chains whose destructors may run after atexit handlers.
+    // Unmapping the registered pool here would leave those TLS chains
+    // pointing into unmapped memory. The process reclaims global URMA
+    // resources on exit; GlobalRelease remains available for init rollback.
     LOG(INFO) << "URMA initialized: device=" << device_name
               << " max_sge=" << g_max_sge
               << " buffer_size=" << g_pool_buffer_size

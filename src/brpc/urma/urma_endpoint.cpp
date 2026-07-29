@@ -70,6 +70,7 @@ DECLARE_bool(urma_recv_zerocopy);
 DECLARE_int32(urma_zerocopy_min_size);
 DECLARE_int32(urma_prepared_jetty_cnt);
 DECLARE_bool(urma_poller_yield);
+DECLARE_bool(urma_trace_verbose);
 
 // ---- Constants shared with the handshake module ----
 static const int WAIT_TIMEOUT_MS = 50;
@@ -648,6 +649,10 @@ ssize_t UrmaEndpoint::CutFromIOBufList(butil::IOBuf** from, size_t ndata) {
             errno = rc;
             return -1;
         }
+        LOG_IF(INFO, FLAGS_urma_trace_verbose)
+            << "URMA posted SEND: payload_size=" << this_len
+            << " num_sge=" << sge_index << " ack=" << ack
+            << " on " << _socket->description();
         _sq_current = (_sq_current + 1) % (_sq_size - RESERVED_WR_NUM);
         _remote_rq_window_size.fetch_sub(1, butil::memory_order_relaxed);
         _sq_window_size.fetch_sub(1, butil::memory_order_relaxed);
@@ -755,6 +760,15 @@ int UrmaEndpoint::SendAck(int num) {
 
 ssize_t UrmaEndpoint::HandleCompletion(const urma_cr_t& cr) {
     bool zerocopy = FLAGS_urma_recv_zerocopy;
+    LOG_IF(INFO, FLAGS_urma_trace_verbose)
+        << "URMA completion: status=" << cr.status
+        << " direction=" << (cr.flag.bs.s_r ? "recv" : "send")
+        << " opcode="
+        << (cr.flag.bs.s_r ? static_cast<int>(cr.opcode) : -1)
+        << " length=" << cr.completion_len
+        << " imm=" << (cr.flag.bs.s_r ? cr.imm_data : 0)
+        << " user_ctx=" << cr.user_ctx
+        << " on " << _socket->description();
     if (cr.status != URMA_CR_SUCCESS) {
         LOG(WARNING) << "URMA completion failed, status=" << cr.status;
         errno = EIO;
@@ -854,6 +868,9 @@ void UrmaEndpoint::PollCq(Socket* m) {
             return;
         }
         if (cnt == 0) { break; }
+        LOG_IF(INFO, FLAGS_urma_trace_verbose)
+            << "URMA polled " << cnt << " completion(s) on "
+            << s->description();
         for (int i = 0; i < cnt; ++i) {
             if (s->Failed()) { return; }
             ssize_t nr = ep->HandleCompletion(crs[i]);
@@ -1002,6 +1019,10 @@ void UrmaEndpoint::FallbackToTcp(UrmaTransport* transport, bool process_tcp) {
 
 void UrmaEndpoint::FailHandshake(UrmaTransport* transport, int error,
                                  const char* reason) {
+    LOG(ERROR) << "URMA handshake failed in state=" << GetStateStr()
+               << " on " << _socket->description()
+               << ": " << reason << ", error=" << error
+               << " (" << berror(error) << ')';
     transport->_urma_state = UrmaTransport::URMA_OFF;
     _state.store(FAILED, butil::memory_order_release);
     DeallocateResources();
@@ -1022,6 +1043,8 @@ void* UrmaEndpoint::ProcessHandshakeAtClient(void* arg) {
     SocketUniquePtr s(ep->_socket);
     auto* tp = static_cast<UrmaTransport*>(s->_transport.get());
     UrmaConnect::RunGuard guard(static_cast<UrmaConnect*>(s->_app_connect.get()));
+    LOG_IF(INFO, FLAGS_urma_trace_verbose)
+        << "Start URMA client handshake on " << s->description();
     if (!IsUrmaAvailable()) {
         ep->FallbackToTcp(tp, true);
         return nullptr;
@@ -1036,6 +1059,8 @@ void* UrmaEndpoint::ProcessHandshakeAtClient(void* arg) {
         ep->FallbackToTcp(tp, true);
         return nullptr;
     }
+    LOG_IF(INFO, FLAGS_urma_trace_verbose)
+        << "URMA client resources ready on " << s->description();
     ep->_state = C_HELLO_SEND;
     std::unique_ptr<UrmaHandshake> hs(CreateClientHandshake(ep));
     ep->_handshake_version = hs->ProtocolVersion();
@@ -1044,6 +1069,8 @@ void* UrmaEndpoint::ProcessHandshakeAtClient(void* arg) {
         ep->FailHandshake(tp, saved_errno, "send client hello");
         return nullptr;
     }
+    LOG_IF(INFO, FLAGS_urma_trace_verbose)
+        << "URMA client hello sent on " << s->description();
     ep->_state = C_HELLO_WAIT;
     ParsedHello remote;
     bool negotiated = false;
@@ -1056,6 +1083,8 @@ void* UrmaEndpoint::ProcessHandshakeAtClient(void* arg) {
         ep->FallbackToTcp(tp, true);
         return nullptr;
     }
+    LOG_IF(INFO, FLAGS_urma_trace_verbose)
+        << "URMA client received server hello on " << s->description();
     ep->ApplyRemoteHello(remote);
     ep->_state = C_IMPORT_PEER;
     if (ep->ImportPeer(remote) < 0) {
@@ -1063,6 +1092,8 @@ void* UrmaEndpoint::ProcessHandshakeAtClient(void* arg) {
         ep->FailHandshake(tp, saved_errno, "import server resources");
         return nullptr;
     }
+    LOG_IF(INFO, FLAGS_urma_trace_verbose)
+        << "URMA client imported server resources on " << s->description();
     ep->_state = C_ACK_SEND;
     uint32_t flags = HELLO_ACK_URMA_OK;
     uint32_t flags_be = butil::HostToNet32(flags);
@@ -1073,6 +1104,9 @@ void* UrmaEndpoint::ProcessHandshakeAtClient(void* arg) {
     }
     tp->_urma_state = UrmaTransport::URMA_ON;
     ep->_state = ESTABLISHED;
+    LOG_IF(INFO, FLAGS_urma_trace_verbose)
+        << "URMA client handshake established (v"
+        << ep->_handshake_version << ") on " << s->description();
     return nullptr;
 }
 
@@ -1081,6 +1115,8 @@ void* UrmaEndpoint::ProcessHandshakeAtServer(void* arg) {
     SocketUniquePtr s(ep->_socket);
     auto* tp = static_cast<UrmaTransport*>(s->_transport.get());
     UrmaConnect::RunGuard guard(static_cast<UrmaConnect*>(s->_app_connect.get()));
+    LOG_IF(INFO, FLAGS_urma_trace_verbose)
+        << "Start URMA server handshake on " << s->description();
     ep->_state = S_HELLO_WAIT;
     uint8_t magic[v2_wire::MAGIC_STR_LEN];
     if (ep->ReadFromFd(magic, v2_wire::MAGIC_STR_LEN) < 0) {
@@ -1107,6 +1143,8 @@ void* UrmaEndpoint::ProcessHandshakeAtServer(void* arg) {
         ep->FailHandshake(tp, EPROTO, "invalid client hello");
         return nullptr;
     }
+    LOG_IF(INFO, FLAGS_urma_trace_verbose)
+        << "URMA server received client hello on " << s->description();
     ep->_state = S_ALLOC_RES;
     if (ep->AllocateResources() < 0) {
         const int saved_errno = errno ? errno : EIO;
@@ -1118,6 +1156,8 @@ void* UrmaEndpoint::ProcessHandshakeAtServer(void* arg) {
         ep->FailHandshake(tp, saved_errno, "post server receives");
         return nullptr;
     }
+    LOG_IF(INFO, FLAGS_urma_trace_verbose)
+        << "URMA server resources ready on " << s->description();
     ep->ApplyRemoteHello(remote);
     ep->_state = S_IMPORT_PEER;
     if (ep->ImportPeer(remote) < 0) {
@@ -1125,12 +1165,16 @@ void* UrmaEndpoint::ProcessHandshakeAtServer(void* arg) {
         ep->FailHandshake(tp, saved_errno, "import client resources");
         return nullptr;
     }
+    LOG_IF(INFO, FLAGS_urma_trace_verbose)
+        << "URMA server imported client resources on " << s->description();
     ep->_state = S_HELLO_SEND;
     if (hs->SendLocalHello() < 0) {
         const int saved_errno = errno ? errno : EIO;
         ep->FailHandshake(tp, saved_errno, "send server hello");
         return nullptr;
     }
+    LOG_IF(INFO, FLAGS_urma_trace_verbose)
+        << "URMA server hello sent on " << s->description();
     ep->_state = S_ACK_WAIT;
     uint32_t flags_be = 0;
     if (ep->ReadFromFd(&flags_be, HELLO_ACK_LEN) < 0) {
@@ -1149,6 +1193,9 @@ void* UrmaEndpoint::ProcessHandshakeAtServer(void* arg) {
         }
         tp->_urma_state = UrmaTransport::URMA_ON;
         ep->_state = ESTABLISHED;
+        LOG_IF(INFO, FLAGS_urma_trace_verbose)
+            << "URMA server handshake established (v"
+            << ep->_handshake_version << ") on " << s->description();
     } else {
         ep->FallbackToTcp(tp, true);
     }
@@ -1161,6 +1208,10 @@ void* UrmaEndpoint::ProcessHandshakeAtServer(void* arg) {
 
 void UrmaConnect::StartConnect(const Socket* socket,
                                void (*done)(int, void*), void* data) {
+    SocketUniquePtr s;
+    if (Socket::Address(socket->id(), &s) != 0) {
+        return;
+    }
     _done = done;
     _data = data;
     _error = 0;
@@ -1187,6 +1238,10 @@ void UrmaConnect::StartConnect(const Socket* socket,
         tp->_urma_ep->_state = UrmaEndpoint::FALLBACK_TCP;
         tp->_urma_state = UrmaTransport::URMA_OFF;
         Run();
+    } else {
+        // ProcessHandshakeAtClient adopts this reference in its
+        // SocketUniquePtr constructor.
+        s.release();
     }
 }
 

@@ -1122,13 +1122,17 @@ void* UrmaEndpoint::ProcessHandshakeAtClient(void* arg) {
         ep->FallbackToTcp(tp, true);
         return nullptr;
     }
-    // Pre-post recv buffers.
-    if (ep->PostRecv(ep->_rq_size, FLAGS_urma_recv_zerocopy) < 0) {
+    const bool bonding = IsUrmaBondingDevice();
+    // Non-bonding providers do not depend on the imported peer when choosing
+    // the receive queue, so retain the original early-post behavior.
+    if (!bonding &&
+        ep->PostRecv(ep->_rq_size, FLAGS_urma_recv_zerocopy) < 0) {
         ep->FallbackToTcp(tp, true);
         return nullptr;
     }
     LOG_IF(INFO, FLAGS_urma_trace_verbose)
-        << "URMA client resources ready on " << s->description();
+        << "URMA client resources ready (bonding=" << bonding
+        << ") on " << s->description();
     ep->_state = C_HELLO_SEND;
     std::unique_ptr<UrmaHandshake> hs(CreateClientHandshake(ep));
     ep->_handshake_version = hs->ProtocolVersion();
@@ -1160,6 +1164,18 @@ void* UrmaEndpoint::ProcessHandshakeAtClient(void* arg) {
         ep->FailHandshake(tp, saved_errno, "import server resources");
         return nullptr;
     }
+    // The bonding provider uses the imported target jetty to select a
+    // compatible physical receive slice. Posting before ImportPeer can put all
+    // initial RQ entries on an unreachable default slice.
+    if (bonding &&
+        ep->PostRecv(ep->_rq_size, FLAGS_urma_recv_zerocopy) < 0) {
+        const int saved_errno = errno ? errno : EIO;
+        ep->FailHandshake(tp, saved_errno, "post client receives");
+        return nullptr;
+    }
+    LOG_IF(INFO, FLAGS_urma_trace_verbose && bonding)
+        << "URMA client initial receives posted after peer import on "
+        << s->description();
     LOG_IF(INFO, FLAGS_urma_trace_verbose)
         << "URMA client imported server resources on " << s->description();
     ep->_state = C_ACK_SEND;
@@ -1219,13 +1235,16 @@ void* UrmaEndpoint::ProcessHandshakeAtServer(void* arg) {
         ep->FailHandshake(tp, saved_errno, "allocate server resources");
         return nullptr;
     }
-    if (ep->PostRecv(ep->_rq_size, FLAGS_urma_recv_zerocopy) < 0) {
+    const bool bonding = IsUrmaBondingDevice();
+    if (!bonding &&
+        ep->PostRecv(ep->_rq_size, FLAGS_urma_recv_zerocopy) < 0) {
         const int saved_errno = errno ? errno : EIO;
         ep->FailHandshake(tp, saved_errno, "post server receives");
         return nullptr;
     }
     LOG_IF(INFO, FLAGS_urma_trace_verbose)
-        << "URMA server resources ready on " << s->description();
+        << "URMA server resources ready (bonding=" << bonding
+        << ") on " << s->description();
     ep->ApplyRemoteHello(remote);
     ep->_state = S_IMPORT_PEER;
     if (ep->ImportPeer(remote) < 0) {
@@ -1233,6 +1252,15 @@ void* UrmaEndpoint::ProcessHandshakeAtServer(void* arg) {
         ep->FailHandshake(tp, saved_errno, "import client resources");
         return nullptr;
     }
+    if (bonding &&
+        ep->PostRecv(ep->_rq_size, FLAGS_urma_recv_zerocopy) < 0) {
+        const int saved_errno = errno ? errno : EIO;
+        ep->FailHandshake(tp, saved_errno, "post server receives");
+        return nullptr;
+    }
+    LOG_IF(INFO, FLAGS_urma_trace_verbose && bonding)
+        << "URMA server initial receives posted after peer import on "
+        << s->description();
     LOG_IF(INFO, FLAGS_urma_trace_verbose)
         << "URMA server imported client resources on " << s->description();
     ep->_state = S_HELLO_SEND;

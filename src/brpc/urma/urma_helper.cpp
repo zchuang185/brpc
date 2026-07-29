@@ -168,11 +168,25 @@ size_t AlignUp(size_t v, size_t align) {
     return (v + align - 1) / align * align;
 }
 
+bool IsBondingDeviceName(const char* name) {
+    return name != nullptr && strncmp(name, "bonding", 7) == 0;
+}
+
 bool ConfigureBondingMode(const std::string& device_name) {
-    if (device_name.compare(0, 7, "bonding") != 0) {
+    const char* context_device_name =
+        g_context != nullptr && g_context->dev != nullptr
+            ? g_context->dev->name
+            : nullptr;
+    g_is_bonding_device =
+        IsBondingDeviceName(device_name.c_str()) ||
+        IsBondingDeviceName(context_device_name);
+    LOG(INFO) << "URMA device mode detected: selected_device=" << device_name
+              << " context_device="
+              << (context_device_name != nullptr ? context_device_name : "<null>")
+              << " bonding=" << g_is_bonding_device;
+    if (!g_is_bonding_device) {
         return true;
     }
-    g_is_bonding_device = true;
 
 #if BRPC_URMA_HAS_BONDING_EXT
     if (FLAGS_urma_bonding_mode < 0 ||
@@ -573,6 +587,7 @@ static bool GlobalUrmaInitializeImpl() {
     // pointing into unmapped memory. The process reclaims global URMA
     // resources on exit; GlobalRelease remains available for init rollback.
     LOG(INFO) << "URMA initialized: device=" << device_name
+              << " bonding=" << g_is_bonding_device
               << " max_sge=" << g_max_sge
               << " buffer_size=" << g_pool_buffer_size
               << " buffer_count=" << g_pool->buffer_count();

@@ -247,7 +247,12 @@ void UrmaEndpoint::MakeLocalParsedHello(ParsedHello* out) const {
     if (_resource && _resource->jetty) {
         out->jetty_id = _resource->jetty->jetty_id.id;
         out->uasid = _resource->jetty->jetty_id.uasid;
-        std::memcpy(out->eid, _resource->jetty->jetty_id.eid.raw, 16);
+        const urma_eid_t* local_eid = GetUrmaLocalEid();
+        const uint8_t* advertised_eid =
+            local_eid != nullptr
+                ? local_eid->raw
+                : _resource->jetty->jetty_id.eid.raw;
+        std::memcpy(out->eid, advertised_eid, 16);
     }
     out->tp_type = static_cast<uint8_t>(URMA_CTP);
     // Pool segment: flatten g_pool_seg's seg fields.
@@ -259,6 +264,30 @@ void UrmaEndpoint::MakeLocalParsedHello(ParsedHello* out) const {
         out->seg_va = pool->seg.ubva.va;
         out->seg_len = pool->seg.len;
         out->seg_token_id = pool->seg.token_id;
+    }
+    if (FLAGS_urma_trace_verbose && _resource && _resource->jetty) {
+        char advertised_eid[URMA_EID_STR_LEN + 1] = {};
+        char jetty_eid[URMA_EID_STR_LEN + 1] = {};
+        char segment_eid[URMA_EID_STR_LEN + 1] = {};
+        std::snprintf(advertised_eid, sizeof(advertised_eid), EID_FMT,
+                      EID_RAW_ARGS(out->eid));
+        std::snprintf(jetty_eid, sizeof(jetty_eid), EID_FMT,
+                      EID_ARGS(_resource->jetty->jetty_id.eid));
+        std::snprintf(segment_eid, sizeof(segment_eid), EID_FMT,
+                      EID_RAW_ARGS(out->seg_eid));
+        LOG(INFO) << "URMA local hello identity: eid_source="
+                  << (GetUrmaLocalEid() != nullptr ? "selected_device"
+                                                   : "jetty_fallback")
+                  << " advertised_eid=" << advertised_eid
+                  << " jetty_eid=" << jetty_eid
+                  << " advertised_matches_jetty="
+                  << (std::memcmp(out->eid,
+                                  _resource->jetty->jetty_id.eid.raw,
+                                  sizeof(out->eid)) == 0)
+                  << " segment_eid=" << segment_eid
+                  << " uasid=" << out->uasid
+                  << " jetty_id=" << out->jetty_id
+                  << " on " << _socket->description();
     }
 }
 
@@ -573,15 +602,25 @@ int UrmaEndpoint::ImportPeer(const ParsedHello& peer) {
                     << " bonding_extension=" << use_bonding_extension;
         return -1;
     }
+    char peer_eid[URMA_EID_STR_LEN + 1] = {};
+    char peer_seg_eid[URMA_EID_STR_LEN + 1] = {};
+    std::snprintf(peer_eid, sizeof(peer_eid), EID_FMT,
+                  EID_RAW_ARGS(peer.eid));
+    std::snprintf(peer_seg_eid, sizeof(peer_seg_eid), EID_FMT,
+                  EID_RAW_ARGS(peer.seg_eid));
     LOG_IF(INFO, FLAGS_urma_trace_verbose)
         << "URMA peer import details: bonding=" << use_bonding_extension
+        << " peer_eid=" << peer_eid
+        << " peer_seg_eid=" << peer_seg_eid
         << " local_jetty_id=" << _resource->jetty->jetty_id.id
         << " remote_jetty_id=" << _resource->remote_jetty->id.id
         << " remote_handle=" << _resource->remote_jetty->handle
         << " provider_associated_remote="
         << static_cast<const void*>(_resource->jetty->remote_jetty)
-        << " trans_mode=" << _resource->remote_jetty->trans_mode
-        << " tp_type=" << _resource->remote_jetty->tp_type
+        << " requested_trans_mode=" << remote.trans_mode
+        << " imported_trans_mode=" << _resource->remote_jetty->trans_mode
+        << " requested_tp_type=" << remote.tp_type
+        << " imported_tp_type=" << _resource->remote_jetty->tp_type
         << " state=" << GetStateStr()
         << " on " << _socket->description();
     return 0;

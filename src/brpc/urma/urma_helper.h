@@ -67,6 +67,12 @@ uint64_t GetSegHandle(void* buf);
 // device / EID). Returns NULL if URMA is not initialized.
 urma_context_t* GetUrmaContext();
 
+// Get the EID selected when the global context was created. This is the
+// device EID that must be advertised to peers, especially for bonding
+// devices where a created jetty may expose a provider-specific physical EID.
+// Returns NULL if URMA is not initialized.
+const urma_eid_t* GetUrmaLocalEid();
+
 // Return true when the selected URMA device is a bonding provider device.
 bool IsUrmaBondingDevice();
 

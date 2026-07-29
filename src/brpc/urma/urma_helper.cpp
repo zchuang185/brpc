@@ -125,6 +125,8 @@ butil::atomic<bool> g_urma_available(false);
 
 static urma_device_t* g_device = nullptr;
 static urma_context_t* g_context = nullptr;
+static urma_eid_t g_local_eid{};
+static bool g_has_local_eid = false;
 static urma_device_attr_t g_device_attr{};
 static int g_max_sge = 1;
 static size_t g_recv_block_size = 8 * 1024;
@@ -427,6 +429,8 @@ static void GlobalRelease() {
         urma_delete_context(g_context);
         g_context = nullptr;
     }
+    g_local_eid = urma_eid_t{};
+    g_has_local_eid = false;
     g_is_bonding_device = false;
     if (g_owns_urma_init) {
         const urma_status_t status = urma_uninit();
@@ -512,6 +516,12 @@ static bool GlobalUrmaInitializeImpl() {
         g_device = nullptr;
         return false;
     }
+    // Retain the exact EID used to create the context. Yalanting advertises
+    // this device EID during its handshake instead of jetty_id.eid. The
+    // distinction matters for a bonding virtual device whose jetty can carry
+    // a provider-selected physical EID.
+    g_local_eid = eids[0].eid;
+    g_has_local_eid = true;
     g_context = urma_create_context(found, eids[0].eid_index);
     urma_free_eid_list(eids);
     urma_free_device_list(devices);
@@ -629,6 +639,9 @@ bool SupportedByUrma(std::string protocol) {
 }
 
 urma_context_t* GetUrmaContext() { return g_context; }
+const urma_eid_t* GetUrmaLocalEid() {
+    return g_has_local_eid ? &g_local_eid : nullptr;
+}
 bool IsUrmaBondingDevice() { return g_is_bonding_device; }
 int GetUrmaMaxSge() { return g_max_sge; }
 size_t GetUrmaRecvBlockSize() { return g_recv_block_size; }

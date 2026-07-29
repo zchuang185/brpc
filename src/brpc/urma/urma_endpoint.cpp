@@ -126,12 +126,6 @@ std::vector<UrmaEndpoint::PollerGroup> UrmaEndpoint::_poller_groups;
 // ============================================================================
 
 UrmaResource::~UrmaResource() {
-    // The bonding RM provider uses this public association as a receive-path
-    // routing hint. Clear it before the imported target is released so the
-    // local jetty never retains a dangling pointer during teardown.
-    if (jetty && jetty->remote_jetty == remote_jetty) {
-        jetty->remote_jetty = nullptr;
-    }
     if (remote_jetty) { urma_unimport_jetty(remote_jetty); }
     if (remote_seg)  { urma_unimport_seg(remote_seg); }
     if (jetty)       { urma_delete_jetty(jetty); }
@@ -579,48 +573,13 @@ int UrmaEndpoint::ImportPeer(const ParsedHello& peer) {
                     << " bonding_extension=" << use_bonding_extension;
         return -1;
     }
-    if (use_bonding_extension) {
-        urma_target_jetty_t*& associated_remote =
-            _resource->jetty->remote_jetty;
-        if (associated_remote == nullptr) {
-            // bondp_import_jetty() is expected to set this for an RM import
-            // carrying bondp_rjetty_t::jetty. Some provider versions import
-            // the target successfully but leave the public association null.
-            // bondp's standalone receive scheduler then posts every RQE to the
-            // default physical slice, which can make the reverse SEND wait
-            // forever when its selected target slice differs. This assignment
-            // mirrors the provider's own RM extended-import behavior; do not
-            // call urma_bind_jetty(), which is restricted to URMA_TM_RC.
-            associated_remote = _resource->remote_jetty;
-            LOG(WARNING)
-                << "URMA bonding provider left RM jetty association unset; "
-                   "installed receive-path association explicitly"
-                << " local_jetty_id=" << _resource->jetty->jetty_id.id
-                << " remote_jetty_id=" << _resource->remote_jetty->id.id
-                << " on " << _socket->description();
-        } else if (associated_remote != _resource->remote_jetty) {
-            LOG(ERROR)
-                << "URMA bonding jetty is associated with an unexpected target"
-                << " local_jetty_id=" << _resource->jetty->jetty_id.id
-                << " expected_remote_jetty_id="
-                << _resource->remote_jetty->id.id
-                << " actual_remote_jetty_id=" << associated_remote->id.id
-                << " on " << _socket->description();
-            errno = EPROTO;
-            return -1;
-        }
-    }
     LOG_IF(INFO, FLAGS_urma_trace_verbose)
         << "URMA peer import details: bonding=" << use_bonding_extension
         << " local_jetty_id=" << _resource->jetty->jetty_id.id
         << " remote_jetty_id=" << _resource->remote_jetty->id.id
         << " remote_handle=" << _resource->remote_jetty->handle
-        << " local_associated_remote="
+        << " provider_associated_remote="
         << static_cast<const void*>(_resource->jetty->remote_jetty)
-        << " imported_remote="
-        << static_cast<const void*>(_resource->remote_jetty)
-        << " association_matches="
-        << (_resource->jetty->remote_jetty == _resource->remote_jetty)
         << " trans_mode=" << _resource->remote_jetty->trans_mode
         << " tp_type=" << _resource->remote_jetty->tp_type
         << " state=" << GetStateStr()
@@ -736,8 +695,6 @@ ssize_t UrmaEndpoint::CutFromIOBufList(butil::IOBuf** from, size_t ndata) {
         const uint16_t sq_slot = _sq_current;
         const uint32_t local_jetty_id = _resource->jetty->jetty_id.id;
         const uint32_t remote_jetty_id = _resource->remote_jetty->id.id;
-        const bool association_matches =
-            _resource->jetty->remote_jetty == _resource->remote_jetty;
         LOG_IF(WARNING,
                FLAGS_urma_trace_verbose && IsUrmaBondingDevice() &&
                    _state.load(butil::memory_order_acquire) != ESTABLISHED)
@@ -756,7 +713,6 @@ ssize_t UrmaEndpoint::CutFromIOBufList(butil::IOBuf** from, size_t ndata) {
             << " pending_ack=" << pending_ack
             << " local_jetty_id=" << local_jetty_id
             << " remote_jetty_id=" << remote_jetty_id
-            << " association_matches=" << association_matches
             << " state=" << GetStateStr()
             << " sq_window=" << sq_wnd
             << " remote_rq_window=" << remote_wnd
@@ -772,7 +728,6 @@ ssize_t UrmaEndpoint::CutFromIOBufList(butil::IOBuf** from, size_t ndata) {
                          << ", sq_slot=" << sq_slot
                          << ", local_jetty_id=" << local_jetty_id
                          << ", remote_jetty_id=" << remote_jetty_id
-                         << ", association_matches=" << association_matches
                          << ", state=" << GetStateStr()
                          << ", sq_window=" << sq_wnd
                          << ", remote_rq_window=" << remote_wnd
@@ -791,7 +746,6 @@ ssize_t UrmaEndpoint::CutFromIOBufList(butil::IOBuf** from, size_t ndata) {
             << " pending_ack=" << pending_ack
             << " local_jetty_id=" << local_jetty_id
             << " remote_jetty_id=" << remote_jetty_id
-            << " association_matches=" << association_matches
             << " state=" << GetStateStr()
             << " sq_window_after=" << (sq_wnd - 1)
             << " remote_rq_window_after=" << (remote_wnd - 1)
@@ -821,20 +775,18 @@ int UrmaEndpoint::DoPostRecv(void* block, size_t block_size) {
     urma_sg_t sg{&sge, 1};
     urma_jfr_wr_t wr{sg, 0, nullptr};
     urma_jfr_wr_t* bad = nullptr;
-    // A bonding jetty uses its imported remote_jetty to select a compatible
-    // physical receive slice. Posting directly to the shared JFR bypasses
-    // that association and always selects the default slice.
+    // Match yalantinglibs' shared-JFR path on every device, including bonding.
+    // The bonding provider owns physical receive scheduling for the JFR; a
+    // local jetty-to-target association is not part of the RM receive API.
     const urma_status_t status =
-        IsUrmaBondingDevice()
-            ? urma_post_jetty_recv_wr(_resource->jetty, &wr, &bad)
-            : urma_post_jfr_wr(_resource->jfr, &wr, &bad);
+        urma_post_jfr_wr(_resource->jfr, &wr, &bad);
     if (status != URMA_SUCCESS) {
         LOG(WARNING) << "Failed to post URMA receive WR: status=" << status
                      << " bonding=" << IsUrmaBondingDevice()
                      << " bad_wr=" << static_cast<const void*>(bad)
                      << " bad_is_current=" << (bad == &wr)
                      << " local_jetty_id=" << _resource->jetty->jetty_id.id
-                     << " associated_remote="
+                     << " provider_associated_remote="
                      << static_cast<const void*>(
                             _resource->jetty->remote_jetty)
                      << " state=" << GetStateStr()
@@ -889,11 +841,9 @@ int UrmaEndpoint::PostRecv(uint32_t num, bool zerocopy) {
         << " next_rq_slot=" << _rq_received
         << " block_size=" << GetUrmaRecvBlockSize()
         << " zerocopy=" << zerocopy
-        << " api="
-        << (IsUrmaBondingDevice() ? "urma_post_jetty_recv_wr"
-                                  : "urma_post_jfr_wr")
+        << " api=urma_post_jfr_wr"
         << " local_jetty_id=" << _resource->jetty->jetty_id.id
-        << " associated_remote="
+        << " provider_associated_remote="
         << static_cast<const void*>(_resource->jetty->remote_jetty)
         << " state=" << GetStateStr()
         << " on " << _socket->description();
@@ -1329,10 +1279,9 @@ void* UrmaEndpoint::ProcessHandshakeAtClient(void* arg) {
         return nullptr;
     }
     const bool bonding = IsUrmaBondingDevice();
-    // Non-bonding providers do not depend on the imported peer when choosing
-    // the receive queue, so retain the original early-post behavior.
-    if (!bonding &&
-        ep->PostRecv(ep->_rq_size, FLAGS_urma_recv_zerocopy) < 0) {
+    // Yalanting preposts the shared JFR before sending the client hello. This
+    // gives the peer a ready receive queue as soon as its import completes.
+    if (ep->PostRecv(ep->_rq_size, FLAGS_urma_recv_zerocopy) < 0) {
         ep->FallbackToTcp(tp, true);
         return nullptr;
     }
@@ -1370,18 +1319,9 @@ void* UrmaEndpoint::ProcessHandshakeAtClient(void* arg) {
         ep->FailHandshake(tp, saved_errno, "import server resources");
         return nullptr;
     }
-    // The bonding provider uses the imported target jetty to select a
-    // compatible physical receive slice. Posting before ImportPeer can put all
-    // initial RQ entries on an unreachable default slice.
-    if (bonding &&
-        ep->PostRecv(ep->_rq_size, FLAGS_urma_recv_zerocopy) < 0) {
-        const int saved_errno = errno ? errno : EIO;
-        ep->FailHandshake(tp, saved_errno, "post client receives");
-        return nullptr;
-    }
     LOG_IF(INFO, FLAGS_urma_trace_verbose && bonding)
-        << "URMA client initial receives posted via bonding jetty after peer "
-           "import on "
+        << "URMA client initial receives were preposted via shared JFR before "
+           "hello on "
         << s->description();
     LOG_IF(INFO, FLAGS_urma_trace_verbose)
         << "URMA client imported server resources on " << s->description();
@@ -1467,7 +1407,7 @@ void* UrmaEndpoint::ProcessHandshakeAtServer(void* arg) {
         return nullptr;
     }
     LOG_IF(INFO, FLAGS_urma_trace_verbose && bonding)
-        << "URMA server initial receives posted via bonding jetty after peer "
+        << "URMA server initial receives posted via shared JFR after peer "
            "import on "
         << s->description();
     LOG_IF(INFO, FLAGS_urma_trace_verbose)

@@ -509,17 +509,13 @@ TEST_F(UrmaMockTest,
     EXPECT_EQ(13u, receiver_cr[1].imm_data);
     EXPECT_EQ(0u, receiver_cr[1].completion_len);
 
-    // Exercise the response direction as well. The production bonding path
-    // installs these public RM associations when an extended import succeeds
-    // without doing so, then posts receives through the duplex jetty.
+    // Exercise the response direction as well. Production follows
+    // yalantinglibs and posts all receive WRs through the shared JFR.
     urma_rjetty_t sender_remote = remote;
     sender_remote.jetty_id = sender->jetty_id;
     urma_target_jetty_t* sender_target =
         urma_import_jetty(ctx, &sender_remote, &token);
     ASSERT_NE(nullptr, sender_target);
-    sender->remote_jetty = target;
-    receiver->remote_jetty = sender_target;
-
     char response_buf[64]{};
     urma_sge_t response_recv_sge{
         reinterpret_cast<uint64_t>(response_buf), sizeof(response_buf),
@@ -527,7 +523,7 @@ TEST_F(UrmaMockTest,
     urma_sg_t response_recv_sg{&response_recv_sge, 1};
     urma_jfr_wr_t response_recv_wr{response_recv_sg, 101, nullptr};
     ASSERT_EQ(URMA_SUCCESS,
-              urma_post_jetty_recv_wr(sender, &response_recv_wr, &bad_recv));
+              urma_post_jfr_wr(sender_jfr, &response_recv_wr, &bad_recv));
 
     const char response[] = "urma-response";
     urma_sge_t response_send_sge{
@@ -555,8 +551,6 @@ TEST_F(UrmaMockTest,
     EXPECT_EQ(sizeof(response), response_recv_cr.completion_len);
     EXPECT_EQ(0, memcmp(response, response_buf, sizeof(response)));
 
-    sender->remote_jetty = nullptr;
-    receiver->remote_jetty = nullptr;
     urma_unimport_jetty(sender_target);
     urma_unimport_jetty(target);
     urma_delete_jetty(receiver);

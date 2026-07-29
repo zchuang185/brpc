@@ -29,7 +29,9 @@
 #include "butil/iobuf.h"
 #include "butil/macros.h"
 #include "butil/containers/mpsc_queue.h"
+#include "butil/containers/optional.h"
 #include "brpc/socket.h"
+#include "brpc/rdma/rdma_handshake_server.h"
 
 
 namespace brpc {
@@ -45,10 +47,11 @@ class RdmaHandshakeServerV2;
 class RdmaHandshakeClientV3;
 class RdmaHandshakeServerV3;
 struct ParsedHello;
+enum class RemoteHelloResult;
 class RdmaHello;
 class RdmaEndpoint;
 namespace v2_wire {
-    int ReadBodyAndNegotiate(RdmaEndpoint* ep, ParsedHello* remote, bool* negotiated);
+    RemoteHelloResult ReadBodyAndNegotiate(RdmaEndpoint* ep, ParsedHello* remote);
     int DrainBytes(RdmaEndpoint* ep, size_t n);
 }  // namespace v2_wire
 
@@ -96,11 +99,11 @@ friend class RdmaHandshakeClientV2;
 friend class RdmaHandshakeServerV2;
 friend class RdmaHandshakeClientV3;
 friend class RdmaHandshakeServerV3;
-friend int v2_wire::ReadBodyAndNegotiate(RdmaEndpoint*, ParsedHello*, bool*);
+friend RemoteHelloResult v2_wire::ReadBodyAndNegotiate(RdmaEndpoint*, ParsedHello*);
 friend int v2_wire::DrainBytes(RdmaEndpoint*, size_t);
 friend void v3_wire::FillLocalRdmaHello(const RdmaEndpoint*, RdmaHello*);
-friend int  v3_wire::ReadAndParseV3Hello(RdmaEndpoint*, RdmaHello*);
-friend int  v3_wire::WriteV3Hello(RdmaEndpoint*, const RdmaHello&);
+friend int v3_wire::ReadAndParseV3Hello(RdmaEndpoint*, RdmaHello*);
+friend int v3_wire::WriteV3Hello(RdmaEndpoint*, const RdmaHello&);
 public:
     explicit RdmaEndpoint(Socket* s);
     ~RdmaEndpoint() override;
@@ -125,8 +128,12 @@ public:
     void DebugInfo(std::ostream& os,
                    butil::StringPiece connector = "\n") const;
 
-    // Callback when there is new epollin event on TCP fd
+    // Callback when there is new epollin event on TCP fd.
+    // Only used by client-side RDMA sockets.
     static void OnNewDataFromTcp(Socket* m);
+
+    // Real handshake for RDMA-mode sockets.
+    static ParseResult ExecuteServerHandshake(butil::IOBuf* source, Socket* socket);
 
     // Initialize polling mode
     static int PollingModeInitialize(bthread_tag_t tag,
@@ -156,9 +163,6 @@ private:
 
     // Process handshake at the client
     static void* ProcessHandshakeAtClient(void* arg);
-
-    // Process handshake at the server
-    static void* ProcessHandshakeAtServer(void* arg);
 
     // Allocate resources
     // Return 0 if success, -1 if failed and errno set
@@ -227,15 +231,14 @@ private:
     // peer's hello has been validated.
     void ApplyRemoteHello(const ParsedHello& remote);
 
-    // Bringup the QP from RESET state to RTS state
+    // Bringup the QP from RESET state to RTS state.
     // Arguments:
-    //     lid: remote LID
-    //     gid: remote GID
-    //     qp_num: remote QP number
-    // Return:
-    //     0:   success
-    //     -1:  failed, errno set
-    int BringUpQp(uint16_t lid, ibv_gid gid, uint32_t qp_num);
+    //   remote: parsed remote hello. Provides the remote LID/GID/QP
+    //           number for the RTR transition, and (on v3) the peer's
+    //           ECE to set during the INIT->RTR transition.
+    //   is_server: true on the server side, false on the client side.
+    // Returns 0 on success, -1 on failed and errno set.
+    int BringUpQp(const ParsedHello& remote, bool is_server);
 
     // Get event from comp channel and ack the events
     int GetAndAckEvents(SocketUniquePtr& s);
@@ -249,9 +252,6 @@ private:
     // Get the description of current handshake state
     std::string GetStateStr() const;
 
-    // Try to read data on TCP fd in _socket
-    void TryReadOnTcp();
-
     // Add cq socket id to poller
     void PollerAddCqSid();
 
@@ -261,8 +261,8 @@ private:
     // Not owner
     Socket* _socket;
 
-    // State of Handshake
-    butil::atomic<State> _state;
+    // State of Handshake.
+    State _state;
 
     // Wire-level handshake protocol version (set by dispatch in
     // ProcessHandshakeAtClient/Server). Aligned with the protocol code:
@@ -270,6 +270,13 @@ private:
     //   2 = v2 "RDMA"
     //   3 = v3 "RDM3"
     int _handshake_version;
+
+    // ECE payload to advertise in the next local hello:
+    //   Client: the locally queried ECE capabilities (filled
+    //           before C_HELLO_SEND);
+    //   Server: the reduced/negotiated ECE queried after the
+    //           QP reached RTS (filled in BringUpQp).
+    butil::optional<ibv_ece> _outgoing_ece;
 
     // rdma resource
     RdmaResource* _resource;

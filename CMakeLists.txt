@@ -28,6 +28,7 @@ option(WITH_BTHREAD_TRACER "With bthread tracer supported" OFF)
 option(WITH_SNAPPY "With snappy" OFF)
 option(WITH_RDMA "With RDMA" OFF)
 option(WITH_URMA "With URMA (openEuler Unified Remote Memory Access)" OFF)
+option(WITH_UBRING "With UB" OFF)
 option(WITH_DEBUG_BTHREAD_SCHE_SAFETY "With debugging bthread sche safety" OFF)
 option(WITH_DEBUG_LOCK "With debugging lock" OFF)
 option(WITH_ASAN "With AddressSanitizer" OFF)
@@ -117,6 +118,9 @@ endif()
 set(WITH_URMA_VAL "0")
 if(WITH_URMA)
     set(WITH_URMA_VAL "1")
+set(WITH_UBRING_VAL "0")
+if(WITH_UBRING)
+        set(WITH_UBRING_VAL "1")
 endif()
 
 set(WITH_DEBUG_BTHREAD_SCHE_SAFETY_VAL "0")
@@ -154,6 +158,7 @@ list(APPEND BRPC_COMMON_DEFINITIONS
     BRPC_WITH_GLOG=${WITH_GLOG_VAL}
     BRPC_WITH_RDMA=${WITH_RDMA_VAL}
     BRPC_WITH_URMA=${WITH_URMA_VAL}
+    BRPC_WITH_UBRING=${WITH_UBRING_VAL}
     BRPC_DEBUG_BTHREAD_SCHE_SAFETY=${WITH_DEBUG_BTHREAD_SCHE_SAFETY_VAL}
     BRPC_DEBUG_LOCK=${WITH_DEBUG_LOCK_VAL}
     BTHREAD_USE_FAST_PTHREAD_MUTEX
@@ -390,11 +395,17 @@ if(WITH_RDMA)
     list(APPEND DYNAMIC_LIB ${RDMA_LIB})
 endif()
 
+
 if(WITH_URMA)
     message(STATUS "brpc compile with urma (mock=${URMA_USE_MOCK})")
     if(NOT URMA_USE_MOCK)
         list(APPEND DYNAMIC_LIB ${URMA_LIB})
     endif()
+endif()  
+
+if(WITH_UBRING)
+    message(STATUS "brpc compile with ubring")
+    list(APPEND DYNAMIC_LIB ${UB_LIB})
 endif()
 
 set(BRPC_PRIVATE_LIBS "-lgflags -lprotobuf -lleveldb -lprotoc -lssl -lcrypto -ldl -lz")
@@ -521,6 +532,7 @@ set(BUTIL_SOURCES
     ${PROJECT_SOURCE_DIR}/src/butil/strings/string_number_conversions.cc
     ${PROJECT_SOURCE_DIR}/src/butil/strings/string_split.cc
     ${PROJECT_SOURCE_DIR}/src/butil/strings/string_piece.cc
+    ${PROJECT_SOURCE_DIR}/src/butil/string_compare_rvv.cc
     ${PROJECT_SOURCE_DIR}/src/butil/strings/string_util.cc
     ${PROJECT_SOURCE_DIR}/src/butil/strings/string_util_constants.cc
     ${PROJECT_SOURCE_DIR}/src/butil/strings/stringprintf.cc

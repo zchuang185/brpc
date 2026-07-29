@@ -607,11 +607,15 @@ int Server::AddBuiltinServices() {
     return 0;
 }
 
-bool is_http_protocol(const char* name) {
+BUTIL_FORCE_INLINE bool is_http_protocol(const char* name) {
     if (name[0] != 'h') {
         return false;
     }
     return strcmp(name, "http") == 0 || strcmp(name, "h2") == 0;
+}
+
+BUTIL_FORCE_INLINE bool is_rdma_handshake_protocol(const char* name) {
+    return strcmp(name, "rdma_handshake") == 0;
 }
 
 Acceptor* Server::BuildAcceptor() {
@@ -637,6 +641,7 @@ Acceptor* Server::BuildAcceptor() {
         }
         if (has_whitelist &&
             !is_http_protocol(protocols[i].name) &&
+            !is_rdma_handshake_protocol(protocols[i].name) &&
             !whitelist.erase(protocols[i].name)) {
             // the protocol is not allowed to serve.
             RPC_VLOG << "Skip protocol=" << protocols[i].name;
@@ -1124,7 +1129,8 @@ int Server::StartInternal(const butil::EndPoint& endpoint,
     _listen_addr = endpoint;
     for (int port = port_range.min_port; port <= port_range.max_port; ++port) {
         _listen_addr.port = port;
-        butil::fd_guard sockfd(tcp_listen(_listen_addr));
+        butil::fd_guard sockfd(tcp_listen(_listen_addr,
+                                          SetSocketBufferOptions));
         if (sockfd < 0) {
             if (port != port_range.max_port) { // not the last port, try next
                 continue;
@@ -1192,7 +1198,8 @@ int Server::StartInternal(const butil::EndPoint& endpoint,
 
         butil::EndPoint internal_point = _listen_addr;
         internal_point.port = _options.internal_port;
-        butil::fd_guard sockfd(tcp_listen(internal_point));
+        butil::fd_guard sockfd(tcp_listen(internal_point,
+                                          SetSocketBufferOptions));
         if (sockfd < 0) {
             LOG(ERROR) << "Fail to listen " << internal_point << " (internal)";
             return -1;

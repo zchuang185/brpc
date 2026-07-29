@@ -21,7 +21,8 @@ namespace brpc {
 enum SocketMode {
     SOCKET_MODE_TCP = 0,
     SOCKET_MODE_RDMA = 1,
-    SOCKET_MODE_URMA = 2
+    SOCKET_MODE_UBRING = 2,
+    SOCKET_MODE_URMA = 3
 };
 } // namespace brpc
 #endif //BRPC_SOCKET_MODE_H

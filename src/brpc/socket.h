@@ -61,6 +61,7 @@ class RdmaHandshakeServerV2;
 class RdmaHandshakeClientV3;
 class RdmaHandshakeServerV3;
 }
+<<<<<<< HEAD
 namespace urma {
 class UrmaEndpoint;
 class UrmaConnect;
@@ -70,11 +71,20 @@ class UrmaHandshakeClientV3;
 class UrmaHandshakeServerV3;
 }
 
+=======
+namespace ubring {
+    class UBShmEndpoint;
+    class UBConnect;
+}
+>>>>>>> origin
 class Socket;
 class AuthContext;
 class EventDispatcher;
 class Stream;
 class Transport;
+
+// Set SO_SNDBUF/SO_RCVBUF according to socket_*_buffer_size flags.
+void SetSocketBufferOptions(int fd);
 
 // A special closure for processing the about-to-recycle socket. Socket does
 // not delete SocketUser, if you want, `delete this' at the end of
@@ -329,6 +339,9 @@ friend class policy::RtmpContext;
 friend class schan::ChannelBalancer;
 friend class rdma::RdmaEndpoint;
 friend class rdma::RdmaConnect;
+friend class ubring::UBShmEndpoint;
+friend class ubring::UBConnect;
+friend class UBShmTransport;
 friend class rdma::RdmaHandshakeClientV2;
 friend class rdma::RdmaHandshakeServerV2;
 friend class rdma::RdmaHandshakeClientV3;
@@ -608,6 +621,9 @@ public:
 
     // True if this socket was created by Connect.
     bool CreatedByConnect() const;
+
+    // The socket mode decided at creation.
+    SocketMode socket_mode() const { return _socket_mode; }
 
     // Get an UNUSED socket connecting to the same place as this socket
     // from the SocketPool of this socket.

@@ -29,10 +29,15 @@ namespace brpc {
 namespace rdma {
 class RdmaEndpoint;
 }
+
 namespace urma {
 class UrmaEndpoint;
 }
+namespace ubring {
+class UBShmEndpoint;
+}
 class TcpTransport;
+class RdmaTransport;
 struct InputMessageHandler {
     // The callback to cut a message from `source'.
     // Returned message will be passed to process_request or process_response
@@ -95,8 +100,10 @@ private:
 class InputMessenger : public SocketUser {
 friend class Socket;
 friend class TcpTransport;
+friend class RdmaTransport;
 friend class rdma::RdmaEndpoint;
 friend class urma::UrmaEndpoint;
+friend class ubring::UBShmEndpoint;
 public:
     explicit InputMessenger(size_t capacity = 128);
     ~InputMessenger();

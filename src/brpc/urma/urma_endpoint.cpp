@@ -531,24 +531,20 @@ int UrmaEndpoint::ImportPeer(const ParsedHello& peer) {
     remote.tp_type = static_cast<urma_tp_type_t>(peer.tp_type);
 
     urma_token_t token{};
+    const bool use_bonding_extension =
+        IsUrmaBondingDevice() && remote.trans_mode == URMA_TM_RM;
     errno = 0;
-    _resource->remote_jetty = urma_import_jetty(ctx, &remote, &token);
-    const int plain_import_errno = errno;
-    bool used_bonding_extension = false;
-    if (!_resource->remote_jetty && IsUrmaBondingDevice() &&
-        remote.trans_mode == URMA_TM_RM) {
+    if (use_bonding_extension) {
 #if BRPC_URMA_HAS_BONDING_EXT
-        LOG(WARNING) << "Plain urma_import_jetty failed: errno="
-                     << plain_import_errno
-                     << ", retrying with bonding extension";
+        // The bonding provider needs the local jetty to associate its send
+        // path with the imported target. A plain import may return success
+        // without setting that association, leaving traffic one-way only.
         bondp_rjetty_t bonding_remote{};
         bonding_remote.base = remote;
         bonding_remote.base.flag.bs.has_drv_ext = 1;
         bonding_remote.jetty = _resource->jetty;
-        errno = 0;
         _resource->remote_jetty =
             urma_import_jetty(ctx, &bonding_remote.base, &token);
-        used_bonding_extension = true;
         if (_resource->remote_jetty) {
             LOG(INFO) << "URMA bonding remote jetty import succeeded"
                       << " remote_jetty_id=" << peer.jetty_id;
@@ -558,11 +554,11 @@ int UrmaEndpoint::ImportPeer(const ParsedHello& peer) {
                       "urma/urma_ubagg.h";
         errno = ENOTSUP;
 #endif
+    } else {
+        _resource->remote_jetty = urma_import_jetty(ctx, &remote, &token);
     }
     if (!_resource->remote_jetty) {
-        if (errno == 0) {
-            errno = plain_import_errno != 0 ? plain_import_errno : EIO;
-        }
+        if (errno == 0) { errno = EIO; }
         char remote_eid[URMA_EID_STR_LEN + 1] = {};
         std::snprintf(remote_eid, sizeof(remote_eid), EID_FMT,
                       EID_RAW_ARGS(peer.eid));
@@ -572,7 +568,7 @@ int UrmaEndpoint::ImportPeer(const ParsedHello& peer) {
                     << " remote_jetty_id=" << peer.jetty_id
                     << " trans_mode=" << remote.trans_mode
                     << " tp_type=" << remote.tp_type
-                    << " bonding_extension=" << used_bonding_extension;
+                    << " bonding_extension=" << use_bonding_extension;
         return -1;
     }
     return 0;

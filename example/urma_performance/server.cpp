@@ -65,6 +65,11 @@ int main(int argc, char* argv[]) {
     brpc::Server server;
     test::PerfTestServiceImpl service;
 
+    if (server.AddService(&service, brpc::SERVER_DOESNT_OWN_SERVICE) != 0) {
+        LOG(ERROR) << "Fail to add PerfTestService";
+        return -1;
+    }
+
     brpc::ServerOptions options;
     options.socket_mode = FLAGS_use_urma ? brpc::SOCKET_MODE_URMA
                                           : brpc::SOCKET_MODE_TCP;
@@ -72,7 +77,6 @@ int main(int argc, char* argv[]) {
         LOG(ERROR) << "Fail to start server";
         return -1;
     }
-    server.AddService(&service, brpc::SERVER_DOESNT_OWN_SERVICE);
     LOG(INFO) << "URMA performance server started on port " << FLAGS_port
               << " (use_urma=" << FLAGS_use_urma << ")";
     server.RunUntilAskedToQuit();

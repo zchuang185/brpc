@@ -121,6 +121,10 @@ static urma_context_t* g_context = nullptr;
 static urma_device_attr_t g_device_attr{};
 static int g_max_sge = 1;
 static size_t g_recv_block_size = 8 * 1024;
+// urma_init/urma_uninit manage process-global liburma state. Only uninitialize
+// it when this helper performed the successful initialization; URMA_EEXIST
+// means another component owns that state.
+static bool g_owns_urma_init = false;
 
 // The single registered segment backing the buffer pool. The whole pool is
 // one urma_register_seg call, sliced into fixed-size buffers. urma_target_seg_t
@@ -316,7 +320,8 @@ urma_target_seg_t* GetPoolSegFor(void* buf) {
     return nullptr;
 }
 
-static void CleanupFailedInitialization() {
+static void GlobalRelease() {
+    g_urma_available.store(false, butil::memory_order_release);
     if (g_mem_alloc_orig) {
         butil::iobuf::blockmem_allocate = g_mem_alloc_orig;
         g_mem_alloc_orig = nullptr;
@@ -349,8 +354,14 @@ static void CleanupFailedInitialization() {
         urma_delete_context(g_context);
         g_context = nullptr;
     }
+    if (g_owns_urma_init) {
+        const urma_status_t status = urma_uninit();
+        if (status != URMA_SUCCESS) {
+            LOG(WARNING) << "Fail to urma_uninit: " << status;
+        }
+        g_owns_urma_init = false;
+    }
     g_device = nullptr;
-    g_urma_available.store(false, butil::memory_order_release);
 }
 
 // ============================================================================
@@ -372,11 +383,22 @@ static bool GlobalUrmaInitializeImpl() {
     }
 
     urma_init_attr_t init_attr{};
-    int status = urma_init(&init_attr);
+    const urma_status_t status = urma_init(&init_attr);
     if (status != URMA_SUCCESS && status != URMA_EEXIST) {
-        LOG(ERROR) << "Fail to urma_init: " << status;
+        if (status == URMA_FAIL) {
+            LOG(ERROR) << "Fail to urma_init: " << status
+                       << " (URMA_FAIL). liburma returns URMA_FAIL when it "
+                          "cannot load a provider, or when URMA was already "
+                          "initialized by another component. Verify readable "
+                          "provider libraries under /usr/lib64/urma, loaded "
+                          "URMA kernel drivers, and that urma_init is called "
+                          "only once per process";
+        } else {
+            LOG(ERROR) << "Fail to urma_init: " << status;
+        }
         return false;
     }
+    g_owns_urma_init = (status == URMA_SUCCESS);
 
     int num_devices = 0;
     urma_device_t** devices = urma_get_device_list(&num_devices);
@@ -470,6 +492,7 @@ static bool GlobalUrmaInitializeImpl() {
     }
 
     g_urma_available.store(true, butil::memory_order_release);
+    atexit(GlobalRelease);
     LOG(INFO) << "URMA initialized: device=" << device_name
               << " max_sge=" << g_max_sge
               << " buffer_size=" << g_pool_buffer_size
@@ -488,7 +511,7 @@ void GlobalUrmaInitializeOrDie() {
         BAIDU_SCOPED_LOCK(g_init_mutex);
         if (!GlobalUrmaInitializeImpl()) {
             LOG(WARNING) << "URMA initialization failed; falling back to TCP";
-            CleanupFailedInitialization();
+            GlobalRelease();
         }
         g_init_once.store(2, butil::memory_order_release);
     } else {

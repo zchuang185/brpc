@@ -61,7 +61,7 @@ class RdmaHandshakeServerV2;
 class RdmaHandshakeClientV3;
 class RdmaHandshakeServerV3;
 }
-<<<<<<< HEAD
+
 namespace urma {
 class UrmaEndpoint;
 class UrmaConnect;
@@ -71,12 +71,11 @@ class UrmaHandshakeClientV3;
 class UrmaHandshakeServerV3;
 }
 
-=======
 namespace ubring {
     class UBShmEndpoint;
     class UBConnect;
 }
->>>>>>> origin
+
 class Socket;
 class AuthContext;
 class EventDispatcher;

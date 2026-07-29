@@ -118,6 +118,8 @@ endif()
 set(WITH_URMA_VAL "0")
 if(WITH_URMA)
     set(WITH_URMA_VAL "1")
+endif()
+
 set(WITH_UBRING_VAL "0")
 if(WITH_UBRING)
         set(WITH_UBRING_VAL "1")

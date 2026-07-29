@@ -715,7 +715,17 @@ int UrmaEndpoint::DoPostRecv(void* block, size_t block_size) {
     urma_sg_t sg{&sge, 1};
     urma_jfr_wr_t wr{sg, 0, nullptr};
     urma_jfr_wr_t* bad = nullptr;
-    if (urma_post_jfr_wr(_resource->jfr, &wr, &bad) != URMA_SUCCESS) {
+    // A bonding jetty uses its imported remote_jetty to select a compatible
+    // physical receive slice. Posting directly to the shared JFR bypasses
+    // that association and always selects the default slice.
+    const urma_status_t status =
+        IsUrmaBondingDevice()
+            ? urma_post_jetty_recv_wr(_resource->jetty, &wr, &bad)
+            : urma_post_jfr_wr(_resource->jfr, &wr, &bad);
+    if (status != URMA_SUCCESS) {
+        LOG(WARNING) << "Failed to post URMA receive WR: status=" << status
+                     << " bonding=" << IsUrmaBondingDevice();
+        errno = status;
         return -1;
     }
     return 0;
@@ -1174,7 +1184,8 @@ void* UrmaEndpoint::ProcessHandshakeAtClient(void* arg) {
         return nullptr;
     }
     LOG_IF(INFO, FLAGS_urma_trace_verbose && bonding)
-        << "URMA client initial receives posted after peer import on "
+        << "URMA client initial receives posted via bonding jetty after peer "
+           "import on "
         << s->description();
     LOG_IF(INFO, FLAGS_urma_trace_verbose)
         << "URMA client imported server resources on " << s->description();
@@ -1259,7 +1270,8 @@ void* UrmaEndpoint::ProcessHandshakeAtServer(void* arg) {
         return nullptr;
     }
     LOG_IF(INFO, FLAGS_urma_trace_verbose && bonding)
-        << "URMA server initial receives posted after peer import on "
+        << "URMA server initial receives posted via bonding jetty after peer "
+           "import on "
         << s->description();
     LOG_IF(INFO, FLAGS_urma_trace_verbose)
         << "URMA server imported client resources on " << s->description();

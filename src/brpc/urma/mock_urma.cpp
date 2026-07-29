@@ -624,6 +624,21 @@ urma_status_t urma_post_jfr_wr(urma_jfr_t *jfr, urma_jfr_wr_t *wr,
     return URMA_SUCCESS;
 }
 
+urma_status_t urma_post_jetty_recv_wr(urma_jetty_t *jetty,
+                                      urma_jfr_wr_t *wr,
+                                      urma_jfr_wr_t **bad_wr) {
+    urma_jfr_t* shared_jfr = nullptr;
+    {
+        std::shared_lock<std::shared_mutex> lock(g_rw_mutex);
+        if (!jetty || jetty_map.find(jetty) == jetty_map.end()) {
+            if (bad_wr) { *bad_wr = wr; }
+            return URMA_EINVAL;
+        }
+        shared_jfr = jetty->jetty_cfg.shared.jfr;
+    }
+    return urma_post_jfr_wr(shared_jfr, wr, bad_wr);
+}
+
 int urma_poll_jfc(urma_jfc_t *jfc, int num_entries, urma_cr_t *cr_list) {
     JfcState* state = nullptr;
     {

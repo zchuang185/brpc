@@ -27,6 +27,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <sys/resource.h>
 #include <unistd.h>
 
 #include <gflags/gflags.h>
@@ -83,6 +84,36 @@ struct PreparedJetty {
 static butil::Mutex g_prepared_mutex;
 static UrmaResource* g_prepared_list = nullptr;  // singly-linked
 static int g_prepared_cnt = 0;
+
+static int PreparedJettyCount() {
+    const int requested =
+        std::max(0, std::min(FLAGS_urma_prepared_jetty_cnt, 1024));
+    if (requested == 0) {
+        return 0;
+    }
+
+    struct rlimit nofile;
+    if (getrlimit(RLIMIT_NOFILE, &nofile) != 0 ||
+        nofile.rlim_cur == RLIM_INFINITY) {
+        return requested;
+    }
+
+    // In event mode each prepared JFCE consumes a file descriptor. Keep room
+    // for one TCP fd per future URMA connection and for brpc/system internals.
+    static const rlim_t kReservedFdCount = 64;
+    const rlim_t max_prepared =
+        nofile.rlim_cur > kReservedFdCount
+            ? (nofile.rlim_cur - kReservedFdCount) / 2
+            : 0;
+    if (max_prepared >= static_cast<rlim_t>(requested)) {
+        return requested;
+    }
+
+    LOG(WARNING) << "Cap URMA prepared jetty count from " << requested
+                 << " to " << max_prepared
+                 << " due to RLIMIT_NOFILE=" << nofile.rlim_cur;
+    return static_cast<int>(max_prepared);
+}
 
 std::vector<UrmaEndpoint::PollerGroup> UrmaEndpoint::_poller_groups;
 
@@ -378,7 +409,8 @@ int UrmaEndpoint::AllocateResources() {
         jetty_cfg.jfs_cfg.depth = static_cast<uint32_t>(_sq_size);
         jetty_cfg.jfs_cfg.trans_mode = URMA_TM_RM;
         jetty_cfg.jfs_cfg.priority = URMA_MAX_PRIORITY;
-        jetty_cfg.jfs_cfg.max_sge = 1;
+        jetty_cfg.jfs_cfg.max_sge =
+            static_cast<uint8_t>(GetUrmaMaxSge());
         jetty_cfg.jfs_cfg.rnr_retry = URMA_TYPICAL_RNR_RETRY;
         jetty_cfg.jfs_cfg.err_timeout = URMA_TYPICAL_ERR_TIMEOUT;
         jetty_cfg.jfs_cfg.jfc = _resource->jfc;
@@ -609,7 +641,10 @@ ssize_t UrmaEndpoint::CutFromIOBufList(butil::IOBuf** from, size_t ndata) {
         int rc = urma_post_jetty_send_wr(_resource->jetty, &wr, &bad_wr);
         if (rc != URMA_SUCCESS) {
             _new_rq_wrs.fetch_add(ack, butil::memory_order_relaxed);
-            LOG(WARNING) << "urma_post_jetty_send_wr failed: " << rc;
+            LOG(WARNING) << "urma_post_jetty_send_wr failed: " << rc
+                         << ", num_sge=" << sge_index
+                         << ", configured_max_sge=" << GetUrmaMaxSge()
+                         << ", payload_size=" << this_len;
             errno = rc;
             return -1;
         }
@@ -1394,7 +1429,8 @@ int UrmaEndpoint::GlobalInitialize() {
     if (g_prepared_cnt > 0) { return 0; }
     urma_context_t* ctx = GetUrmaContext();
     if (!ctx) { return 0; }
-    for (int i = 0; i < FLAGS_urma_prepared_jetty_cnt && i < 1024; ++i) {
+    const int prepared_jetty_count = PreparedJettyCount();
+    for (int i = 0; i < prepared_jetty_count; ++i) {
         auto* r = new (std::nothrow) UrmaResource();
         if (!r) { break; }
         r->jfce = urma_create_jfce(ctx);
@@ -1421,7 +1457,8 @@ int UrmaEndpoint::GlobalInitialize() {
         jetty_cfg.jfs_cfg.depth = static_cast<uint32_t>(FLAGS_urma_sq_size);
         jetty_cfg.jfs_cfg.trans_mode = URMA_TM_RM;
         jetty_cfg.jfs_cfg.priority = URMA_MAX_PRIORITY;
-        jetty_cfg.jfs_cfg.max_sge = 1;
+        jetty_cfg.jfs_cfg.max_sge =
+            static_cast<uint8_t>(GetUrmaMaxSge());
         jetty_cfg.jfs_cfg.rnr_retry = URMA_TYPICAL_RNR_RETRY;
         jetty_cfg.jfs_cfg.err_timeout = URMA_TYPICAL_ERR_TIMEOUT;
         jetty_cfg.jfs_cfg.jfc = r->jfc;

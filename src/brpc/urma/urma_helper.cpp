@@ -82,8 +82,9 @@ DEFINE_string(urma_device, "",
               "The name of the URMA device to use. Empty means the first one.");
 DEFINE_int32(urma_max_sge, 0,
               "Max SGEs per WR. 0 means the device maximum.");
-DEFINE_int32(urma_prepared_jetty_cnt, 1024,
-              "Number of pre-allocated Jetty+CQ sets for fast connect");
+DEFINE_int32(urma_prepared_jetty_cnt, 8,
+              "Requested number of pre-allocated Jetty+CQ sets for fast "
+              "connect; capped automatically according to RLIMIT_NOFILE");
 
 DEFINE_int32(urma_buffer_size, 8 * 1024,
               "Per-buffer size in the URMA buffer pool (bytes). "
@@ -446,9 +447,19 @@ static bool GlobalUrmaInitializeImpl() {
         LOG(ERROR) << "Fail to urma_create_context";
         return false;
     }
-    g_max_sge = FLAGS_urma_max_sge > 0 ? FLAGS_urma_max_sge
-                                       : static_cast<int>(g_device_attr.dev_cap.max_jfs_sge);
-    if (g_max_sge < 1) { g_max_sge = 1; }
+    uint32_t device_max_sge = g_device_attr.dev_cap.max_jfs_sge;
+    if (device_max_sge == 0) { device_max_sge = 1; }
+    // urma_jfs_cfg_t::max_sge is uint8_t.
+    if (device_max_sge > 255) { device_max_sge = 255; }
+    g_max_sge = static_cast<int>(device_max_sge);
+    if (FLAGS_urma_max_sge > 0) {
+        if (FLAGS_urma_max_sge > g_max_sge) {
+            LOG(WARNING) << "Cap urma_max_sge from " << FLAGS_urma_max_sge
+                         << " to device/config limit " << g_max_sge;
+        } else {
+            g_max_sge = FLAGS_urma_max_sge;
+        }
+    }
     g_recv_block_size =
         static_cast<size_t>(FLAGS_urma_buffer_size) -
         kIOBufBlockHeaderLen;

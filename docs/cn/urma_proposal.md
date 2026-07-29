@@ -322,7 +322,7 @@ server.Start(port, &sopt);
 | `--urma_device` | "" | `urma_helper.cpp` | URMA 设备名；空=首个活跃 |
 | `--urma_sq_size` | 128 | `urma_endpoint.cpp` | 每连接 SQ 深度（[16,4096]） |
 | `--urma_rq_size` | 128 | `urma_endpoint.cpp` | 每连接 RQ 深度 |
-| `--urma_prepared_jetty_cnt` | 1024 | `urma_endpoint.cpp` | 预连接 Jetty 池大小 |
+| `--urma_prepared_jetty_cnt` | 8 | `urma_endpoint.cpp` | 预连接 Jetty 池大小 |
 | `--urma_cqe_poll_once` | 32 | `urma_endpoint.cpp` | 每次 `ibv_poll_cq` 上限 |
 | `--urma_recv_zerocopy` | true | `urma_endpoint.cpp` | 接收零拷贝开关 |
 | `--urma_zerocopy_min_size` | 512 | `urma_endpoint.cpp` | 零拷贝阈值（小于则拷贝） |

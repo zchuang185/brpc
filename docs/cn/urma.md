@@ -120,7 +120,7 @@ block 都由注册 segment 支撑，发送路径可直接从 IOBuf block refs �
 | `--urma_zerocopy_min_size` | 512 | 小于此值的接收拷贝 |
 | `--urma_device` | "" | URMA 设备名（空=首个） |
 | `--urma_max_sge` | 0 | 每 WR SGE 上限（0=设备上限） |
-| `--urma_prepared_jetty_cnt` | 1024 | 预连接 Jetty+CQ 数量 |
+| `--urma_prepared_jetty_cnt` | 8 | 预连接 Jetty+CQ 请求数量；会根据 `RLIMIT_NOFILE` 自动限制 |
 | `--urma_buffer_size` | 8192 | 池中每个 buffer 大小（字节） |
 | `--urma_buffer_count` | 65536 | 池中 buffer 数量 |
 | `--urma_client_handshake_version` | 2 | 客户端握手版本（2=二进制，3=protobuf） |

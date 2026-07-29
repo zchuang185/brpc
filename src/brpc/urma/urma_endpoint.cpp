@@ -851,43 +851,74 @@ void UrmaEndpoint::PollCq(Socket* m) {
     if (Socket::Address(ep->_socket->id(), &s) != 0) { return; }
     if (s->Failed()) { return; }
 
+    urma_jfc_t* event_jfc = nullptr;
     if (!FLAGS_urma_use_polling) {
-        if (ep->GetAndAckEvents(s) != 0 || ep->ReqNotifyCq() != 0) {
+        const int event_count = ep->WaitCqEvent(s, &event_jfc);
+        if (event_count <= 0) {
             return;
         }
     }
 
     ssize_t bytes = 0;
+    int completion_error = 0;
     InputMessageClosure last_msg;
     while (true) {
         int n = std::max(1, std::min<int>(FLAGS_urma_cqe_poll_once, 32));
         urma_cr_t crs[32];
         int cnt = urma_poll_jfc(ep->_resource->jfc, n, crs);
         if (cnt < 0) {
-            s->SetFailed(EIO, "urma_poll_jfc failed: %d", cnt);
-            return;
+            completion_error = EIO;
+            break;
         }
         if (cnt == 0) { break; }
         LOG_IF(INFO, FLAGS_urma_trace_verbose)
             << "URMA polled " << cnt << " completion(s) on "
             << s->description();
         for (int i = 0; i < cnt; ++i) {
-            if (s->Failed()) { return; }
+            if (s->Failed()) {
+                completion_error = ECANCELED;
+                break;
+            }
             ssize_t nr = ep->HandleCompletion(crs[i]);
             if (nr < 0) {
-                s->SetFailed(errno, "URMA completion error");
-                return;
+                completion_error = errno ? errno : EIO;
+                break;
             }
             bytes += nr;
         }
+        if (completion_error != 0) { break; }
+    }
+
+    if (!FLAGS_urma_use_polling) {
+        // URMA requires this strict order:
+        // wait_jfc -> poll_jfc -> ack_jfc -> rearm_jfc.
+        uint32_t nevents = 1;
+        urma_ack_jfc(&event_jfc, &nevents, 1);
+        if (ep->ReqNotifyCq() != 0) {
+            return;
+        }
+    }
+    if (completion_error != 0) {
+        if (!s->Failed()) {
+            s->SetFailed(completion_error, "URMA completion error");
+        }
+        return;
     }
     if (bytes > 0) {
         int64_t received_us = butil::cpuwide_time_us();
         int64_t base_realtime = butil::gettimeofday_us() - received_us;
         auto* messenger = static_cast<InputMessenger*>(s->user());
         if (messenger) {
-            messenger->ProcessNewMessage(s.get(), bytes, false, received_us,
-                                         base_realtime, last_msg);
+            const int rc =
+                messenger->ProcessNewMessage(s.get(), bytes, false, received_us,
+                                             base_realtime, last_msg);
+            LOG_IF(INFO, FLAGS_urma_trace_verbose)
+                << "URMA dispatched " << bytes
+                << " byte(s) to InputMessenger, rc=" << rc
+                << " on " << s->description();
+        } else {
+            LOG(ERROR) << "URMA socket has no InputMessenger: "
+                       << s->description();
         }
     }
 }
@@ -1288,32 +1319,35 @@ void UrmaEndpoint::DebugInfo(std::ostream& os, butil::StringPiece) const {
        << " handshake_version=" << _handshake_version;
 }
 
-int UrmaEndpoint::GetAndAckEvents(SocketUniquePtr& s) {
+int UrmaEndpoint::WaitCqEvent(SocketUniquePtr& s,
+                              urma_jfc_t** event_jfc) {
     if (!_resource || !_resource->jfce || !_resource->jfc) {
         errno = ENODEV;
         return -1;
     }
-    while (true) {
-        urma_jfc_t* jfcs[16]{};
-        int count = urma_wait_jfc(_resource->jfce, 16, 0, jfcs);
-        if (count < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-                return 0;
-            }
-            const int saved_errno = errno;
-            PLOG(ERROR) << "Fail to wait URMA JFC event from "
-                        << s->description();
-            s->SetFailed(saved_errno, "Fail to wait URMA JFC event: %s",
-                         berror(saved_errno));
-            return -1;
+    *event_jfc = nullptr;
+    int count = urma_wait_jfc(_resource->jfce, 1, 0, event_jfc);
+    if (count < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            return 0;
         }
-        if (count == 0) { return 0; }
-        uint32_t nevents[16];
-        for (int i = 0; i < count; ++i) {
-            nevents[i] = 1;
-        }
-        urma_ack_jfc(jfcs, nevents, static_cast<uint32_t>(count));
+        const int saved_errno = errno;
+        PLOG(ERROR) << "Fail to wait URMA JFC event from "
+                    << s->description();
+        s->SetFailed(saved_errno, "Fail to wait URMA JFC event: %s",
+                     berror(saved_errno));
+        return -1;
     }
+    if (count == 0) { return 0; }
+    if (*event_jfc != _resource->jfc) {
+        LOG(ERROR) << "Unexpected URMA JFC event on " << s->description();
+        errno = EPROTO;
+        s->SetFailed(EPROTO, "Unexpected URMA JFC event");
+        return -1;
+    }
+    LOG_IF(INFO, FLAGS_urma_trace_verbose)
+        << "URMA JFC event received on " << s->description();
+    return 1;
 }
 
 int UrmaEndpoint::ReqNotifyCq() {

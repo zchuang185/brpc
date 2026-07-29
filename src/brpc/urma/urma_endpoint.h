@@ -234,8 +234,9 @@ private:
     // (0 for send completions), or -1 on error (errno set).
     ssize_t HandleCompletion(const urma_cr_t& cr);
 
-    // Get-and-ack async events on the JFCE fd (event mode only).
-    int GetAndAckEvents(SocketUniquePtr& s);
+    // Consume one async event from the JFCE fd (event mode only). The caller
+    // must poll the JFC before acknowledging and rearming the event.
+    int WaitCqEvent(SocketUniquePtr& s, urma_jfc_t** event_jfc);
 
     // Request completion notification (event mode only).
     int ReqNotifyCq();

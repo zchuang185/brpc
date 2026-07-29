@@ -126,6 +126,12 @@ std::vector<UrmaEndpoint::PollerGroup> UrmaEndpoint::_poller_groups;
 // ============================================================================
 
 UrmaResource::~UrmaResource() {
+    // The bonding RM provider uses this public association as a receive-path
+    // routing hint. Clear it before the imported target is released so the
+    // local jetty never retains a dangling pointer during teardown.
+    if (jetty && jetty->remote_jetty == remote_jetty) {
+        jetty->remote_jetty = nullptr;
+    }
     if (remote_jetty) { urma_unimport_jetty(remote_jetty); }
     if (remote_seg)  { urma_unimport_seg(remote_seg); }
     if (jetty)       { urma_delete_jetty(jetty); }
@@ -572,6 +578,37 @@ int UrmaEndpoint::ImportPeer(const ParsedHello& peer) {
                     << " tp_type=" << remote.tp_type
                     << " bonding_extension=" << use_bonding_extension;
         return -1;
+    }
+    if (use_bonding_extension) {
+        urma_target_jetty_t*& associated_remote =
+            _resource->jetty->remote_jetty;
+        if (associated_remote == nullptr) {
+            // bondp_import_jetty() is expected to set this for an RM import
+            // carrying bondp_rjetty_t::jetty. Some provider versions import
+            // the target successfully but leave the public association null.
+            // bondp's standalone receive scheduler then posts every RQE to the
+            // default physical slice, which can make the reverse SEND wait
+            // forever when its selected target slice differs. This assignment
+            // mirrors the provider's own RM extended-import behavior; do not
+            // call urma_bind_jetty(), which is restricted to URMA_TM_RC.
+            associated_remote = _resource->remote_jetty;
+            LOG(WARNING)
+                << "URMA bonding provider left RM jetty association unset; "
+                   "installed receive-path association explicitly"
+                << " local_jetty_id=" << _resource->jetty->jetty_id.id
+                << " remote_jetty_id=" << _resource->remote_jetty->id.id
+                << " on " << _socket->description();
+        } else if (associated_remote != _resource->remote_jetty) {
+            LOG(ERROR)
+                << "URMA bonding jetty is associated with an unexpected target"
+                << " local_jetty_id=" << _resource->jetty->jetty_id.id
+                << " expected_remote_jetty_id="
+                << _resource->remote_jetty->id.id
+                << " actual_remote_jetty_id=" << associated_remote->id.id
+                << " on " << _socket->description();
+            errno = EPROTO;
+            return -1;
+        }
     }
     LOG_IF(INFO, FLAGS_urma_trace_verbose)
         << "URMA peer import details: bonding=" << use_bonding_extension

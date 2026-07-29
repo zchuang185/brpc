@@ -385,7 +385,8 @@ TEST_F(UrmaMockTest, post_and_poll_completion) {
     urma_free_device_list(devices);
 }
 
-TEST_F(UrmaMockTest, paired_send_separates_payload_and_immediate_credit) {
+TEST_F(UrmaMockTest,
+       paired_send_is_bidirectional_and_separates_immediate_credit) {
     int num_devices = 0;
     urma_device_t** devices = urma_get_device_list(&num_devices);
     ASSERT_NE(nullptr, devices);
@@ -508,6 +509,55 @@ TEST_F(UrmaMockTest, paired_send_separates_payload_and_immediate_credit) {
     EXPECT_EQ(13u, receiver_cr[1].imm_data);
     EXPECT_EQ(0u, receiver_cr[1].completion_len);
 
+    // Exercise the response direction as well. The production bonding path
+    // installs these public RM associations when an extended import succeeds
+    // without doing so, then posts receives through the duplex jetty.
+    urma_rjetty_t sender_remote = remote;
+    sender_remote.jetty_id = sender->jetty_id;
+    urma_target_jetty_t* sender_target =
+        urma_import_jetty(ctx, &sender_remote, &token);
+    ASSERT_NE(nullptr, sender_target);
+    sender->remote_jetty = target;
+    receiver->remote_jetty = sender_target;
+
+    char response_buf[64]{};
+    urma_sge_t response_recv_sge{
+        reinterpret_cast<uint64_t>(response_buf), sizeof(response_buf),
+        nullptr, nullptr};
+    urma_sg_t response_recv_sg{&response_recv_sge, 1};
+    urma_jfr_wr_t response_recv_wr{response_recv_sg, 101, nullptr};
+    ASSERT_EQ(URMA_SUCCESS,
+              urma_post_jetty_recv_wr(sender, &response_recv_wr, &bad_recv));
+
+    const char response[] = "urma-response";
+    urma_sge_t response_send_sge{
+        reinterpret_cast<uint64_t>(response), sizeof(response), nullptr,
+        nullptr};
+    urma_sg_t response_send_sg{&response_send_sge, 1};
+    urma_jfs_wr_t response_send_wr{};
+    response_send_wr.opcode = URMA_OPC_SEND;
+    response_send_wr.flag.bs.complete_enable = 1;
+    response_send_wr.tjetty = sender_target;
+    response_send_wr.user_ctx = 9;
+    response_send_wr.send.src = response_send_sg;
+    ASSERT_EQ(URMA_SUCCESS,
+              urma_post_jetty_send_wr(receiver, &response_send_wr, &bad_send));
+
+    urma_cr_t response_send_cr{};
+    ASSERT_EQ(1, urma_poll_jfc(receiver_jfc, 1, &response_send_cr));
+    EXPECT_EQ(0, response_send_cr.flag.bs.s_r);
+    EXPECT_EQ(9u, response_send_cr.user_ctx);
+
+    urma_cr_t response_recv_cr{};
+    ASSERT_EQ(1, urma_poll_jfc(sender_jfc, 1, &response_recv_cr));
+    EXPECT_EQ(1, response_recv_cr.flag.bs.s_r);
+    EXPECT_EQ(URMA_CR_OPC_SEND, response_recv_cr.opcode);
+    EXPECT_EQ(sizeof(response), response_recv_cr.completion_len);
+    EXPECT_EQ(0, memcmp(response, response_buf, sizeof(response)));
+
+    sender->remote_jetty = nullptr;
+    receiver->remote_jetty = nullptr;
+    urma_unimport_jetty(sender_target);
     urma_unimport_jetty(target);
     urma_delete_jetty(receiver);
     urma_delete_jetty(sender);

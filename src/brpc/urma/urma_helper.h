@@ -36,8 +36,8 @@ DECLARE_bool(usercode_in_coroutine);
 DECLARE_bool(usercode_in_pthread);
 namespace urma {
 
-// Initialize the URMA environment.
-// Exit the process if initialization fails.
+// Initialize the URMA environment. Failure disables URMA globally so
+// individual sockets transparently fall back to TCP.
 void GlobalUrmaInitializeOrDie();
 
 // Initialize URMA polling mode for a given bthread tag.
@@ -53,7 +53,7 @@ void ReleasePollingModeWithTag(bthread_tag_t tag);
 // Returns the (opaque, non-zero) target segment handle stored in the user-mr
 // table; 0 on failure. To use the memory in an IOBuf, append it via
 // append_user_data_with_meta and pass the returned handle as the data meta.
-uint32_t RegisterMemoryForUrma(void* buf, size_t len);
+uint64_t RegisterMemoryForUrma(void* buf, size_t len);
 
 // Deregister a previously registered user buffer.
 void DeregisterMemoryForUrma(void* buf);
@@ -61,7 +61,7 @@ void DeregisterMemoryForUrma(void* buf);
 // Return the registered-segment handle for a given address, or 0 if the
 // address is not in any region managed by the URMA buffer pool or the user-mr
 // table. The handle is carried by urma_sge_t.tseg on the send path.
-uint32_t GetSegHandle(void* buf);
+uint64_t GetSegHandle(void* buf);
 
 // Get the global URMA context (the urma_context_t created on the selected
 // device / EID). Returns NULL if URMA is not initialized.

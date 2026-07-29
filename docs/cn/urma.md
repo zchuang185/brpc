@@ -76,7 +76,7 @@ UrmaTransport : public Transport         (urma_transport.{h,cpp})
 urma::UrmaEndpoint : public SocketUser   (urma/urma_endpoint.{h,cpp})
   +-- UrmaResource { jfc, jfce, jfr, jetty, remote_jetty, remote_seg }
   +-- 握手状态机（C/S 对称，在 TCP fd 上驱动）
-  +-- 发送路径：urma_post_jetty_send_wr(URMA_OPC_SEND)
+  +-- 发送路径：urma_post_jetty_send_wr(URMA_OPC_SEND_IMM)
   +-- 接收路径：urma_poll_jfc -> HandleCompletion -> InputMessenger
   +-- 双窗口信用流控（_remote_rq_window / _sq_window）
 ```

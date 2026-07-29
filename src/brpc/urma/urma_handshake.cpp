@@ -25,6 +25,7 @@
 
 #include <gflags/gflags.h>
 
+#include "butil/atomicops.h"
 #include "butil/iobuf.h"          // IOBuf, IOPortal, IOBufAsZeroCopy*
 #include "butil/logging.h"
 #include "butil/sys_byteorder.h"
@@ -115,9 +116,13 @@ void HelloMessage::Deserialize(const void* buf) {
 namespace {
 
 constexpr uint32_t MIN_BUFFER_SIZE = 1024;
-constexpr uint32_t MIN_BUFFER_CNT = 1;
+// Three SQ entries are reserved for flow-control messages. The advertised
+// receive count must leave at least one data WR after those reservations.
+constexpr uint32_t MIN_BUFFER_CNT = 3;
 constexpr uint32_t MAX_BUFFER_CNT = 65535;
 constexpr uint32_t MAX_V3_PB_SIZE = 4096;
+
+}  // namespace
 
 bool ValidHello(const ParsedHello& h) {
     if (h.buffer_size < MIN_BUFFER_SIZE) { return false; }
@@ -130,8 +135,6 @@ bool ValidHello(const ParsedHello& h) {
     return true;
 }
 
-}  // namespace
-
 // File-local (not in the anonymous namespace so it can be friend-declared
 // from urma_endpoint.h's UrmaEndpoint). Reads the body following the magic
 // and translates it into ParsedHello.
@@ -141,7 +144,9 @@ int ReadBodyAndNegotiate(UrmaEndpoint* ep, ParsedHello* out, bool* negotiated) {
     if (ep->ReadFromFd(body, v2_wire::HELLO_BODY_LEN) < 0) { return -1; }
     v2_wire::HelloMessage m;
     m.Deserialize(body);
-    if (m.hello_ver != v2_wire::HELLO_V2_VERSION ||
+    if (m.msg_len < v2_wire::HELLO_MSG_LEN_MIN ||
+        m.msg_len > v2_wire::HELLO_MSG_LEN_MAX ||
+        m.hello_ver != v2_wire::HELLO_V2_VERSION ||
         m.impl_ver != v2_wire::IMPL_V2_VERSION) { return 0; }
     ParsedHello p;
     p.buffer_size = m.buffer_size;
@@ -211,7 +216,8 @@ int UrmaHandshakeServerV2::SendLocalHello() {
     v2_wire::HelloMessage m;
     _ep->FillLocalHelloV2(&m);
     auto* tp = static_cast<UrmaTransport*>(_ep->_socket->_transport.get());
-    if (tp->_urma_state == UrmaTransport::URMA_OFF) {
+    if (tp->_urma_state.load(butil::memory_order_acquire) ==
+        UrmaTransport::URMA_OFF) {
         // Tell the client we are not URMA-capable: zero the version fields so
         // the client's version check fails and it falls back to TCP.
         m.hello_ver = 0;

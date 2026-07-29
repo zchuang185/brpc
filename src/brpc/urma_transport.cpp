@@ -87,7 +87,8 @@ std::shared_ptr<AppConnect> UrmaTransport::Connect() {
 }
 
 int UrmaTransport::CutFromIOBuf(butil::IOBuf* buf) {
-    if (_urma_ep && _urma_state != URMA_OFF) {
+    if (_urma_ep &&
+        _urma_state.load(butil::memory_order_acquire) != URMA_OFF) {
         butil::IOBuf* data_arr[1] = {buf};
         return _urma_ep->CutFromIOBufList(data_arr, 1);
     } else {
@@ -96,7 +97,8 @@ int UrmaTransport::CutFromIOBuf(butil::IOBuf* buf) {
 }
 
 ssize_t UrmaTransport::CutFromIOBufList(butil::IOBuf** buf, size_t ndata) {
-    if (_urma_ep && _urma_state != URMA_OFF) {
+    if (_urma_ep &&
+        _urma_state.load(butil::memory_order_acquire) != URMA_OFF) {
         return _urma_ep->CutFromIOBufList(buf, ndata);
     } else {
         return _tcp_transport->CutFromIOBufList(buf, ndata);
@@ -105,7 +107,7 @@ ssize_t UrmaTransport::CutFromIOBufList(butil::IOBuf** buf, size_t ndata) {
 
 int UrmaTransport::WaitEpollOut(butil::atomic<int>* _epollout_butex,
                                 bool pollin, const timespec duetime) {
-    if (_urma_state == URMA_ON) {
+    if (_urma_state.load(butil::memory_order_acquire) == URMA_ON) {
         const int expected_val = _epollout_butex->load(butil::memory_order_acquire);
         CHECK(_urma_ep != nullptr);
         if (!_urma_ep->IsWritable()) {
@@ -178,7 +180,8 @@ void UrmaTransport::QueueMessage(InputMessageClosure& input_msg,
 }
 
 void UrmaTransport::Debug(std::ostream& os) {
-    if (_urma_state == URMA_ON && _urma_ep) {
+    if (_urma_state.load(butil::memory_order_acquire) == URMA_ON &&
+        _urma_ep) {
         _urma_ep->DebugInfo(os);
     }
 }

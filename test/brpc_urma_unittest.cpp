@@ -222,6 +222,26 @@ TEST(UrmaHandshakeTest, parsed_hello_segment_fields) {
     EXPECT_EQ(7u, p.seg_token_id);
 }
 
+TEST(UrmaHandshakeTest, rejects_invalid_resource_and_window_values) {
+    urma::ParsedHello hello;
+    hello.buffer_size = 8192;
+    hello.recv_buffer_cnt = 127;
+    hello.jetty_id = 1;
+    hello.tp_type = URMA_CTP;
+    hello.seg_va = 0x1000;
+    hello.seg_len = 8192;
+    EXPECT_TRUE(urma::ValidHello(hello));
+
+    hello.recv_buffer_cnt = 2;
+    EXPECT_FALSE(urma::ValidHello(hello));
+    hello.recv_buffer_cnt = 127;
+    hello.seg_len = 0;
+    EXPECT_FALSE(urma::ValidHello(hello));
+    hello.seg_len = 8192;
+    hello.jetty_id = 0;
+    EXPECT_FALSE(urma::ValidHello(hello));
+}
+
 // ---------------------------------------------------------------------------
 // SupportedByUrma: only baidu_std.
 // ---------------------------------------------------------------------------
@@ -304,8 +324,11 @@ TEST_F(UrmaMockTest, post_and_poll_completion) {
     urma_context_t* ctx = urma_create_context(devices[0], 0);
     ASSERT_NE(nullptr, ctx);
 
+    urma_jfce_t* jfce = urma_create_jfce(ctx);
+    ASSERT_NE(nullptr, jfce);
     urma_jfc_cfg_t jfc_cfg{};
     jfc_cfg.depth = 16;
+    jfc_cfg.jfce = jfce;
     urma_jfc_t* jfc = urma_create_jfc(ctx, &jfc_cfg);
     ASSERT_NE(nullptr, jfc);
 
@@ -357,6 +380,124 @@ TEST_F(UrmaMockTest, post_and_poll_completion) {
     urma_delete_jetty(jetty);
     urma_delete_jfr(jfr);
     urma_delete_jfc(jfc);
+    urma_delete_jfce(jfce);
+    urma_delete_context(ctx);
+    urma_free_device_list(devices);
+}
+
+TEST_F(UrmaMockTest, paired_send_moves_payload_and_immediate_credit) {
+    int num_devices = 0;
+    urma_device_t** devices = urma_get_device_list(&num_devices);
+    ASSERT_NE(nullptr, devices);
+    ASSERT_GT(num_devices, 0);
+    if (strcmp(devices[0]->name, "mock_urma_device") != 0) {
+        urma_free_device_list(devices);
+        GTEST_SKIP() << "This test exercises the bundled URMA mock";
+    }
+    urma_context_t* ctx = urma_create_context(devices[0], 0);
+    ASSERT_NE(nullptr, ctx);
+
+    urma_jfce_t* sender_jfce = urma_create_jfce(ctx);
+    urma_jfce_t* receiver_jfce = urma_create_jfce(ctx);
+    ASSERT_NE(nullptr, sender_jfce);
+    ASSERT_NE(nullptr, receiver_jfce);
+    urma_jfc_cfg_t sender_jfc_cfg{};
+    sender_jfc_cfg.depth = 8;
+    sender_jfc_cfg.jfce = sender_jfce;
+    urma_jfc_t* sender_jfc = urma_create_jfc(ctx, &sender_jfc_cfg);
+    ASSERT_NE(nullptr, sender_jfc);
+    urma_jfc_cfg_t receiver_jfc_cfg{};
+    receiver_jfc_cfg.depth = 8;
+    receiver_jfc_cfg.jfce = receiver_jfce;
+    urma_jfc_t* receiver_jfc = urma_create_jfc(ctx, &receiver_jfc_cfg);
+    ASSERT_NE(nullptr, receiver_jfc);
+
+    urma_jfr_cfg_t sender_jfr_cfg{};
+    sender_jfr_cfg.depth = 4;
+    sender_jfr_cfg.trans_mode = URMA_TM_RM;
+    sender_jfr_cfg.max_sge = 1;
+    sender_jfr_cfg.jfc = sender_jfc;
+    urma_jfr_t* sender_jfr = urma_create_jfr(ctx, &sender_jfr_cfg);
+    ASSERT_NE(nullptr, sender_jfr);
+    urma_jfr_cfg_t receiver_jfr_cfg = sender_jfr_cfg;
+    receiver_jfr_cfg.jfc = receiver_jfc;
+    urma_jfr_t* receiver_jfr = urma_create_jfr(ctx, &receiver_jfr_cfg);
+    ASSERT_NE(nullptr, receiver_jfr);
+
+    auto create_jetty = [&](urma_jfc_t* jfc, urma_jfr_t* jfr) {
+        urma_jetty_cfg_t cfg{};
+        cfg.flag.bs.share_jfr = 1;
+        cfg.jfs_cfg.depth = 4;
+        cfg.jfs_cfg.trans_mode = URMA_TM_RM;
+        cfg.jfs_cfg.max_sge = 1;
+        cfg.jfs_cfg.jfc = jfc;
+        cfg.shared.jfr = jfr;
+        cfg.shared.jfc = jfc;
+        return urma_create_jetty(ctx, &cfg);
+    };
+    urma_jetty_t* sender = create_jetty(sender_jfc, sender_jfr);
+    urma_jetty_t* receiver = create_jetty(receiver_jfc, receiver_jfr);
+    ASSERT_NE(nullptr, sender);
+    ASSERT_NE(nullptr, receiver);
+
+    urma_rjetty_t remote{};
+    remote.jetty_id = receiver->jetty_id;
+    remote.trans_mode = URMA_TM_RM;
+    remote.type = URMA_JETTY;
+    remote.tp_type = URMA_CTP;
+    urma_token_t token{};
+    urma_target_jetty_t* target =
+        urma_import_jetty(ctx, &remote, &token);
+    ASSERT_NE(nullptr, target);
+
+    char recv_buf[64]{};
+    urma_sge_t recv_sge{
+        reinterpret_cast<uint64_t>(recv_buf), sizeof(recv_buf), nullptr,
+        nullptr};
+    urma_sg_t recv_sg{&recv_sge, 1};
+    urma_jfr_wr_t recv_wr{recv_sg, 99, nullptr};
+    urma_jfr_wr_t* bad_recv = nullptr;
+    ASSERT_EQ(URMA_SUCCESS,
+              urma_post_jfr_wr(receiver_jfr, &recv_wr, &bad_recv));
+
+    const char payload[] = "urma-payload";
+    urma_sge_t send_sge{
+        reinterpret_cast<uint64_t>(payload), sizeof(payload), nullptr,
+        nullptr};
+    urma_sg_t send_sg{&send_sge, 1};
+    urma_jfs_wr_t send_wr{};
+    send_wr.opcode = URMA_OPC_SEND_IMM;
+    send_wr.flag.bs.complete_enable = 1;
+    send_wr.tjetty = target;
+    send_wr.user_ctx = 7;
+    send_wr.send.src = send_sg;
+    send_wr.send.imm_data = 13;
+    urma_jfs_wr_t* bad_send = nullptr;
+    ASSERT_EQ(URMA_SUCCESS,
+              urma_post_jetty_send_wr(sender, &send_wr, &bad_send));
+
+    urma_cr_t sender_cr{};
+    ASSERT_EQ(1, urma_poll_jfc(sender_jfc, 1, &sender_cr));
+    EXPECT_EQ(0, sender_cr.flag.bs.s_r);
+    EXPECT_EQ(7u, sender_cr.user_ctx);
+
+    urma_cr_t receiver_cr{};
+    ASSERT_EQ(1, urma_poll_jfc(receiver_jfc, 1, &receiver_cr));
+    EXPECT_EQ(1, receiver_cr.flag.bs.s_r);
+    EXPECT_EQ(URMA_CR_OPC_SEND_WITH_IMM, receiver_cr.opcode);
+    EXPECT_EQ(13u, receiver_cr.imm_data);
+    EXPECT_EQ(sizeof(payload), receiver_cr.completion_len);
+    EXPECT_EQ(0, memcmp(payload, recv_buf, sizeof(payload)));
+
+    urma_unimport_jetty(target);
+    urma_delete_jetty(receiver);
+    urma_delete_jetty(sender);
+    urma_delete_jfr(receiver_jfr);
+    urma_delete_jfr(sender_jfr);
+    urma_delete_jfc(receiver_jfc);
+    urma_delete_jfc(sender_jfc);
+    urma_delete_jfce(receiver_jfce);
+    urma_delete_jfce(sender_jfce);
     urma_delete_context(ctx);
     urma_free_device_list(devices);
 }

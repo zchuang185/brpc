@@ -74,7 +74,7 @@ private:
     };
 
     urma::UrmaEndpoint* _urma_ep = nullptr;
-    UrmaState _urma_state{URMA_UNKNOWN};
+    butil::atomic<UrmaState> _urma_state{URMA_UNKNOWN};
     std::shared_ptr<TcpTransport> _tcp_transport;
 };
 

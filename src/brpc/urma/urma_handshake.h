@@ -51,16 +51,20 @@ struct ParsedHello {
     uint32_t seg_token_id = 0;      // segment token id
 };
 
+// Validate all values that influence resource import and queue/window sizing.
+// Both v2 and v3 handshakes must pass this check before negotiation succeeds.
+bool ValidHello(const ParsedHello& hello);
+
 // v2 binary wire layout. The full on-wire packet is:
-//   [ "URMA" 4B ][ HelloMessage body 92B ]   => 96 bytes total.
-// (msg_len = 96 includes the magic prefix and the body, matching RDMA's
+//   [ "URMA" 4B ][ HelloMessage body 82B ]   => 86 bytes total.
+// (msg_len = 86 includes the magic prefix and the body, matching RDMA's
 // convention where msg_len covers the whole packet.)
 namespace v2_wire {
 
 constexpr size_t MAGIC_STR_LEN = 4;
 constexpr size_t HELLO_BODY_LEN = 82;
 constexpr size_t HELLO_PACKET_LEN = MAGIC_STR_LEN + HELLO_BODY_LEN;  // 86
-constexpr size_t HELLO_MSG_LEN_MIN = 96;
+constexpr size_t HELLO_MSG_LEN_MIN = HELLO_PACKET_LEN;
 constexpr size_t HELLO_MSG_LEN_MAX = 4096;
 constexpr uint16_t HELLO_V2_VERSION = 2;
 constexpr uint16_t IMPL_V2_VERSION = 1;

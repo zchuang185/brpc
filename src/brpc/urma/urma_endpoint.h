@@ -54,6 +54,7 @@ DECLARE_bool(urma_disable_bthread);
 // UrmaTransport::Connect(); its StartConnect spawns the client-side handshake
 // bthread that drives the URMA negotiation over the already-connected TCP fd.
 class UrmaConnect : public AppConnect {
+    friend class UrmaEndpoint;
 public:
     void StartConnect(const Socket* socket,
                       void (*done)(int err, void* data), void* data) override;
@@ -69,6 +70,7 @@ private:
     void Run();
     void (*_done)(int, void*){nullptr};
     void* _data{nullptr};
+    int _error{0};
 };
 
 // POD holder for the URMA kernel objects backing one connection:
@@ -219,8 +221,8 @@ private:
     // Post a single recv WR pointing at @block of @block_size.
     int DoPostRecv(void* block, size_t block_size);
 
-    // Send a pure-ACK WR (URMA_OPC_SEND with no payload, to flush peer-side
-    // flow-control credit). @imm is unused in v1 (kept for SEND_IMM upgrade).
+    // Send a pure-ACK URMA_OPC_SEND_IMM WR with no payload. @imm carries the
+    // number of receive WRs reposted for peer-side flow-control credit.
     int SendImm(uint32_t imm);
     // Piggyback ack: if _new_rq_wrs is above the threshold, flush it via
     // SendImm. @num is the number of new recv WRs to add.
@@ -243,6 +245,9 @@ private:
     void PollerRemoveCqSid();
 
     inline void TryReadOnTcp();
+    void FallbackToTcp(UrmaTransport* transport, bool process_tcp);
+    void FailHandshake(UrmaTransport* transport, int error,
+                       const char* reason);
 
     // Construct a ParsedHello from local state (used by SendLocalHello).
     void MakeLocalParsedHello(ParsedHello* out) const;
@@ -256,7 +261,7 @@ private:
     Socket* _socket;
 
     // Handshake state.
-    State _state{UNINIT};
+    butil::atomic<State> _state{UNINIT};
     int _handshake_version{0};  // 0 = unnegotiated; 2 = v2; 3 = v3
 
     // The URMA resources (jetty / jfc / jfr / jfce / imported peer objects).
@@ -323,6 +328,7 @@ private:
         butil::atomic<bool> running;
     };
     static std::vector<PollerGroup> _poller_groups;
+    bthread_tag_t _poller_tag{0};
 
     DISALLOW_COPY_AND_ASSIGN(UrmaEndpoint);
 };

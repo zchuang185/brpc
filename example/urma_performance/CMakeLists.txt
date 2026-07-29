@@ -15,129 +15,32 @@
 # specific language governing permissions and limitations
 # under the License.
 
-cmake_minimum_required(VERSION 2.8.10)
+cmake_minimum_required(VERSION 3.16...3.28)
 project(urma_performance C CXX)
+
+include(${CMAKE_CURRENT_LIST_DIR}/../cmake/BrpcExample.cmake)
 
 option(LINK_SO "Whether examples are linked dynamically" OFF)
 
-execute_process(
-    COMMAND bash -c "find ${PROJECT_SOURCE_DIR}/../.. -type d -regex '.*output/include$' | head -n1 | xargs dirname | tr -d '\n'"
-    OUTPUT_VARIABLE OUTPUT_PATH
-)
+brpc_example_find_common_deps(DYNAMIC_LIB)
 
-set(CMAKE_PREFIX_PATH ${OUTPUT_PATH})
-
-include(FindThreads)
-include(FindProtobuf)
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(ABSL absl_log absl_status absl_cord absl_strings absl_time absl_base absl_synchronization absl_spinlock_wait)
 protobuf_generate_cpp(PROTO_SRC PROTO_HEADER test.proto)
-# include PROTO_HEADER
-include_directories(${CMAKE_CURRENT_BINARY_DIR})
-
-# Search for libthrift* by best effort. If it is not found and brpc is
-# compiled with thrift protocol enabled, a link error would be reported.
-find_library(THRIFT_LIB NAMES thrift)
-if (NOT THRIFT_LIB)
-    set(THRIFT_LIB "")
-endif()
-
-find_path(BRPC_INCLUDE_PATH NAMES brpc/server.h)
-if(LINK_SO)
-    find_library(BRPC_LIB NAMES brpc)
-else()
-    find_library(BRPC_LIB NAMES libbrpc.a brpc)
-endif()
-if((NOT BRPC_INCLUDE_PATH) OR (NOT BRPC_LIB))
-    message(FATAL_ERROR "Fail to find brpc")
-endif()
-include_directories(${BRPC_INCLUDE_PATH})
-
-find_path(GFLAGS_INCLUDE_PATH gflags/gflags.h)
-find_library(GFLAGS_LIBRARY NAMES gflags libgflags)
-if((NOT GFLAGS_INCLUDE_PATH) OR (NOT GFLAGS_LIBRARY))
-    message(FATAL_ERROR "Fail to find gflags")
-endif()
-include_directories(${GFLAGS_INCLUDE_PATH})
-
-if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-    include(CheckFunctionExists)
-    CHECK_FUNCTION_EXISTS(clock_gettime HAVE_CLOCK_GETTIME)
-    if(NOT HAVE_CLOCK_GETTIME)
-        set(DEFINE_CLOCK_GETTIME "-DNO_CLOCK_GETTIME_IN_MAC")
-    endif()
-endif()
-
-set(CMAKE_CPP_FLAGS "${DEFINE_CLOCK_GETTIME} -DBRPC_WITH_URMA=1")
-set(CMAKE_CXX_FLAGS "${CMAKE_CPP_FLAGS} -DNDEBUG -O2 -D__const__=__unused__ -pipe -W -Wall -Wno-unused-parameter -fPIC -fno-omit-frame-pointer")
-
-if(CMAKE_VERSION VERSION_LESS "3.1.3")
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17")
-    endif()
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17")
-    endif()
-else()
-    set(CMAKE_CXX_STANDARD 17)
-    set(CMAKE_CXX_STANDARD_REQUIRED ON)
-endif()
-
-find_path(LEVELDB_INCLUDE_PATH NAMES leveldb/db.h)
-find_library(LEVELDB_LIB NAMES leveldb)
-if ((NOT LEVELDB_INCLUDE_PATH) OR (NOT LEVELDB_LIB))
-    message(FATAL_ERROR "Fail to find leveldb")
-endif()
-include_directories(${LEVELDB_INCLUDE_PATH})
-
-if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-    set(OPENSSL_ROOT_DIR
-        "/usr/local/opt/openssl"    # Homebrew installed OpenSSL
-        )
-endif()
-
-find_package(OpenSSL)
-include_directories(${OPENSSL_INCLUDE_DIR})
-
+set(BRPC_EXAMPLE_WITH_URMA ON)
+find_path(URMA_INCLUDE_PATH NAMES urma/urma_api.h
+          PATHS /usr/include /usr/local/include
+          PATH_SUFFIXES ub/umdk ub/umdk/urma umdk umdk/urma)
 find_library(URMA_LIB NAMES urma)
-if (NOT URMA_LIB)
-    message(FATAL_ERROR "Fail to find urma")
-endif()
-
-set(DYNAMIC_LIB
-    ${CMAKE_THREAD_LIBS_INIT}
-    ${GFLAGS_LIBRARY}
-    ${PROTOBUF_LIBRARIES}
-    ${ABSL_LIBRARIES}
-    ${LEVELDB_LIB}
-    ${OPENSSL_CRYPTO_LIBRARY}
-    ${OPENSSL_SSL_LIBRARY}
-    ${THRIFT_LIB}
-    ${URMA_LIB}
-    dl
-    z
-    )
-
-if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-    set(DYNAMIC_LIB ${DYNAMIC_LIB}
-        pthread
-        "-framework CoreFoundation"
-        "-framework CoreGraphics"
-        "-framework CoreData"
-        "-framework CoreText"
-        "-framework Security"
-        "-framework Foundation"
-        "-Wl,-U,_MallocExtension_ReleaseFreeMemory"
-        "-Wl,-U,_ProfilerStart"
-        "-Wl,-U,_ProfilerStop"
-        "-Wl,-U,__Z13GetStackTracePPvii"
-        "-Wl,-U,_mallctl"
-        "-Wl,-U,_malloc_stats_print"
-    )
+if(URMA_LIB)
+    list(APPEND DYNAMIC_LIB ${URMA_LIB})
+else()
+    message(STATUS
+        "liburma not found; the example requires brpc built with the bundled URMA mock")
 endif()
 
 add_executable(urma_performance_client client.cpp ${PROTO_SRC} ${PROTO_HEADER})
+brpc_example_configure_target(urma_performance_client)
 add_executable(urma_performance_server server.cpp ${PROTO_SRC} ${PROTO_HEADER})
+brpc_example_configure_target(urma_performance_server)
 
-target_link_libraries(urma_performance_client ${BRPC_LIB} ${DYNAMIC_LIB})
-target_link_libraries(urma_performance_server ${BRPC_LIB} ${DYNAMIC_LIB})
+target_link_libraries(urma_performance_client PRIVATE ${BRPC_LIB} ${DYNAMIC_LIB})
+target_link_libraries(urma_performance_server PRIVATE ${BRPC_LIB} ${DYNAMIC_LIB})

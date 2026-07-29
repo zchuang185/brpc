@@ -26,6 +26,7 @@
 #include "butil/iobuf.h"
 #include "butil/macros.h"
 #include "butil/containers/mpsc_queue.h"
+#include "butil/synchronization/lock.h"
 #include "bthread/types.h"
 
 #include "brpc/socket.h"
@@ -234,6 +235,12 @@ private:
     // (0 for send completions), or -1 on error (errno set).
     ssize_t HandleCompletion(const urma_cr_t& cr);
 
+    // Queue received bytes for InputMessenger. CQ receive completions can
+    // arrive while the server is still waiting for the final TCP handshake
+    // ACK. Keep those bytes in _socket->_read_buf and dispatch them only after
+    // ESTABLISHED, matching the connection-ready boundary seen by user code.
+    void DispatchReceivedBytes(SocketUniquePtr& s, ssize_t bytes);
+
     // Consume one async event from the JFCE fd (event mode only). The caller
     // must poll the JFC before acknowledging and rearming the event.
     int WaitCqEvent(SocketUniquePtr& s, urma_jfc_t** event_jfc);
@@ -264,6 +271,8 @@ private:
     // Handshake state.
     butil::atomic<State> _state{UNINIT};
     int _handshake_version{0};  // 0 = unnegotiated; 2 = v2; 3 = v3
+    butil::atomic<int64_t> _pending_received_bytes{0};
+    butil::Mutex _dispatch_mutex;
 
     // The URMA resources (jetty / jfc / jfr / jfce / imported peer objects).
     UrmaResource* _resource{nullptr};

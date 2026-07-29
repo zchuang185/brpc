@@ -24,6 +24,7 @@
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -176,6 +177,7 @@ void UrmaEndpoint::Reset() {
     _accumulated_ack = 0;
     _unsolicited = 0;
     _unsolicited_bytes = 0;
+    _pending_received_bytes.store(0, butil::memory_order_relaxed);
     _sbuf.clear();
     _rbuf.clear();
     _rbuf_data.clear();
@@ -1012,6 +1014,58 @@ ssize_t UrmaEndpoint::HandleCompletion(const urma_cr_t& cr) {
     return static_cast<ssize_t>(cr.completion_len);
 }
 
+void UrmaEndpoint::DispatchReceivedBytes(SocketUniquePtr& s, ssize_t bytes) {
+    int64_t pending = _pending_received_bytes.load(butil::memory_order_relaxed);
+    if (bytes > 0) {
+        pending = _pending_received_bytes.fetch_add(
+                      bytes, butil::memory_order_acq_rel) + bytes;
+    }
+
+    const State state = _state.load(butil::memory_order_acquire);
+    if (state != ESTABLISHED) {
+        LOG_IF(INFO, FLAGS_urma_trace_verbose && bytes > 0)
+            << "URMA deferred " << bytes
+            << " received byte(s) until handshake establishment"
+            << " pending_bytes=" << pending
+            << " state=" << GetStateStr()
+            << " on " << s->description();
+        return;
+    }
+
+    // PollCq and the handshake bthread can both reach this method when the
+    // state changes to ESTABLISHED. Serialize them so each byte added to
+    // _socket->_read_buf is reported to InputMessenger exactly once.
+    std::unique_lock<butil::Mutex> dispatch_lock(_dispatch_mutex);
+    if (_state.load(butil::memory_order_acquire) != ESTABLISHED) {
+        return;
+    }
+    pending = _pending_received_bytes.exchange(
+        0, butil::memory_order_acq_rel);
+    if (pending <= 0 || s->Failed()) {
+        return;
+    }
+
+    auto* messenger = static_cast<InputMessenger*>(s->user());
+    if (!messenger) {
+        LOG(ERROR) << "URMA socket has no InputMessenger: "
+                   << s->description();
+        return;
+    }
+
+    const int64_t received_us = butil::cpuwide_time_us();
+    const int64_t base_realtime = butil::gettimeofday_us() - received_us;
+    InputMessageClosure last_msg;
+    const int rc =
+        messenger->ProcessNewMessage(s.get(), static_cast<ssize_t>(pending),
+                                     false, received_us, base_realtime,
+                                     last_msg);
+    LOG_IF(INFO, FLAGS_urma_trace_verbose)
+        << "URMA dispatched " << pending
+        << " byte(s) to InputMessenger, rc=" << rc
+        << " state=" << GetStateStr()
+        << " on " << s->description();
+}
+
 void UrmaEndpoint::PollCq(Socket* m) {
     auto* ep = static_cast<UrmaEndpoint*>(m->user());
     if (!ep || !ep->_resource || !ep->_resource->jfc) { return; }
@@ -1029,7 +1083,6 @@ void UrmaEndpoint::PollCq(Socket* m) {
 
     ssize_t bytes = 0;
     int completion_error = 0;
-    InputMessageClosure last_msg;
     while (true) {
         int n = std::max(1, std::min<int>(FLAGS_urma_cqe_poll_once, 32));
         urma_cr_t crs[32];
@@ -1073,24 +1126,7 @@ void UrmaEndpoint::PollCq(Socket* m) {
         }
         return;
     }
-    if (bytes > 0) {
-        int64_t received_us = butil::cpuwide_time_us();
-        int64_t base_realtime = butil::gettimeofday_us() - received_us;
-        auto* messenger = static_cast<InputMessenger*>(s->user());
-        if (messenger) {
-            const int rc =
-                messenger->ProcessNewMessage(s.get(), bytes, false, received_us,
-                                             base_realtime, last_msg);
-            LOG_IF(INFO, FLAGS_urma_trace_verbose)
-                << "URMA dispatched " << bytes
-                << " byte(s) to InputMessenger, rc=" << rc
-                << " state=" << ep->GetStateStr()
-                << " on " << s->description();
-        } else {
-            LOG(ERROR) << "URMA socket has no InputMessenger: "
-                       << s->description();
-        }
-    }
+    ep->DispatchReceivedBytes(s, bytes);
 }
 
 // ============================================================================
@@ -1325,6 +1361,7 @@ void* UrmaEndpoint::ProcessHandshakeAtClient(void* arg) {
     LOG_IF(INFO, FLAGS_urma_trace_verbose)
         << "URMA client handshake established (v"
         << ep->_handshake_version << ") on " << s->description();
+    ep->DispatchReceivedBytes(s, 0);
     return nullptr;
 }
 
@@ -1427,6 +1464,7 @@ void* UrmaEndpoint::ProcessHandshakeAtServer(void* arg) {
         LOG_IF(INFO, FLAGS_urma_trace_verbose)
             << "URMA server handshake established (v"
             << ep->_handshake_version << ") on " << s->description();
+        ep->DispatchReceivedBytes(s, 0);
     } else {
         ep->FallbackToTcp(tp, true);
     }

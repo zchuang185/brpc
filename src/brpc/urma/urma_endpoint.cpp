@@ -1167,7 +1167,13 @@ void UrmaEndpoint::PollCq(Socket* m) {
             if (event_count == 0) {
                 LOG_IF(INFO, FLAGS_urma_trace_verbose && drained_events > 0)
                     << "URMA JFCE event queue drained: events="
-                    << drained_events << " on " << s->description();
+                    << drained_events
+#if defined(BRPC_REVISION)
+                    << " build_revision=" << BRPC_REVISION
+#else
+                    << " build_revision=undefined"
+#endif
+                    << " on " << s->description();
                 if (!m->MoreReadEvents(&progress)) {
                     return;
                 }

@@ -272,36 +272,56 @@ TEST(UrmaHandshakeTest, supported_by_urma_protocol_allowlist) {
 
 // ---------------------------------------------------------------------------
 // URMA mock smoke test: drives urma_init / device enumeration / context /
-// jetty / post / poll. This works against either the real liburma (hardware
-// env) or the bundled mock_urma.cpp (CI, no liburma). The mock returns
-// device->name == "mock_urma_device" and completes posted WRs immediately.
+// jetty / post / poll. These tests rely on mock semantics and are skipped
+// when the test binary links a real liburma provider.
 // ---------------------------------------------------------------------------
 class UrmaMockTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        // Allow the (possibly mock) urma_init to run for this suite.
         urma::g_skip_urma_init = false;
+
+        urma_init_attr_t init_attr{};
+        const urma_status_t status = urma_init(&init_attr);
+        ASSERT_TRUE(status == URMA_SUCCESS || status == URMA_EEXIST);
+        _owns_urma_init = status == URMA_SUCCESS;
+
+        int num_devices = 0;
+        urma_device_t** devices = urma_get_device_list(&num_devices);
+        ASSERT_NE(nullptr, devices);
+        ASSERT_GT(num_devices, 0);
+        const bool using_mock =
+            strcmp(devices[0]->name, "mock_urma_device") == 0;
+        urma_free_device_list(devices);
+        if (!using_mock) {
+            if (_owns_urma_init) {
+                EXPECT_EQ(URMA_SUCCESS, urma_uninit());
+                _owns_urma_init = false;
+            }
+            GTEST_SKIP() << "UrmaMockTest requires the bundled URMA mock";
+        }
     }
+
     void TearDown() override {
-        // Restore the skip flag for other suites.
+        if (_owns_urma_init) {
+            EXPECT_EQ(URMA_SUCCESS, urma_uninit());
+        }
         urma::g_skip_urma_init = true;
         urma::g_urma_available.store(true, butil::memory_order_relaxed);
     }
+
+private:
+    bool _owns_urma_init{false};
 };
 
 TEST_F(UrmaMockTest, init_and_enumerate_device) {
     urma_init_attr_t init_attr{};
-    urma_status_t st = urma_init(&init_attr);
-    // URMA_SUCCESS on first init; URMA_EEXIST acceptable if already inited.
-    ASSERT_TRUE(st == URMA_SUCCESS || st == URMA_EEXIST);
+    EXPECT_EQ(URMA_EEXIST, urma_init(&init_attr));
 
     int num_devices = 0;
     urma_device_t** devices = urma_get_device_list(&num_devices);
     ASSERT_NE(nullptr, devices);
     ASSERT_GE(num_devices, 1);
-    // The mock names its device "mock_urma_device"; the real library exposes
-    // whatever URMA NIC is present. Either way the name must be non-empty.
-    EXPECT_GT(strlen(devices[0]->name), 0u);
+    EXPECT_STREQ("mock_urma_device", devices[0]->name);
     urma_free_device_list(devices);
 }
 
@@ -329,9 +349,9 @@ TEST_F(UrmaMockTest, create_context_and_query_device) {
     urma_free_device_list(devices);
 }
 
-TEST_F(UrmaMockTest, post_and_poll_completion) {
-    // Create context -> jfc -> jfr -> jetty (share jfr) -> post a send WR
-    // -> poll_jfc should return the user_ctx as a send completion.
+TEST_F(UrmaMockTest, rejects_send_without_target_jetty) {
+    // A SEND without a target jetty is invalid. Keeping the mock strict here
+    // prevents tests from relying on input that a real provider cannot post.
     int num_devices = 0;
     urma_device_t** devices = urma_get_device_list(&num_devices);
     ASSERT_NE(nullptr, devices);
@@ -373,7 +393,6 @@ TEST_F(UrmaMockTest, post_and_poll_completion) {
     urma_jetty_t* jetty = urma_create_jetty(ctx, &jetty_cfg);
     ASSERT_NE(nullptr, jetty);
 
-    // Post a single send WR with user_ctx = 0xABCD.
     urma_jfs_wr_t wr{};
     memset(&wr, 0, sizeof(wr));
     wr.opcode = URMA_OPC_SEND;
@@ -381,18 +400,10 @@ TEST_F(UrmaMockTest, post_and_poll_completion) {
     wr.user_ctx = 0xABCD;
     wr.next = nullptr;
     urma_jfs_wr_t* bad = nullptr;
-    ASSERT_EQ(URMA_SUCCESS, urma_post_jetty_send_wr(jetty, &wr, &bad));
+    EXPECT_EQ(URMA_EINVAL, urma_post_jetty_send_wr(jetty, &wr, &bad));
+    EXPECT_EQ(&wr, bad);
 
-    // Poll: the mock should hand back the completion immediately.
     urma_cr_t crs[4];
-    int n = urma_poll_jfc(jfc, 4, crs);
-    EXPECT_EQ(1, n);
-    if (n == 1) {
-        EXPECT_EQ(URMA_CR_SUCCESS, crs[0].status);
-        EXPECT_EQ(0xABCDULL, crs[0].user_ctx);
-    }
-
-    // A second poll with nothing posted should return 0.
     EXPECT_EQ(0, urma_poll_jfc(jfc, 4, crs));
 
     urma_delete_jetty(jetty);
@@ -409,10 +420,6 @@ TEST_F(UrmaMockTest,
     urma_device_t** devices = urma_get_device_list(&num_devices);
     ASSERT_NE(nullptr, devices);
     ASSERT_GT(num_devices, 0);
-    if (strcmp(devices[0]->name, "mock_urma_device") != 0) {
-        urma_free_device_list(devices);
-        GTEST_SKIP() << "This test exercises the bundled URMA mock";
-    }
     urma_context_t* ctx = urma_create_context(devices[0], 0);
     ASSERT_NE(nullptr, ctx);
 

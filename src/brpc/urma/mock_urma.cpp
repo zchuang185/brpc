@@ -537,6 +537,13 @@ urma_status_t urma_post_jetty_send_wr(urma_jetty_t *jetty, urma_jfs_wr_t *wr,
     read_lock.unlock();
 
     for (urma_jfs_wr_t* current = wr; current; current = current->next) {
+        if (!current->tjetty) {
+            if (bad_wr) {
+                *bad_wr = current;
+            }
+            return URMA_EINVAL;
+        }
+
         urma_cr_t send_cr{};
         send_cr.status = URMA_CR_SUCCESS;
         send_cr.user_ctx = current->user_ctx;
@@ -546,9 +553,6 @@ urma_status_t urma_post_jetty_send_wr(urma_jetty_t *jetty, urma_jfs_wr_t *wr,
                            local_state, send_cr);
         }
 
-        if (!current->tjetty) {
-            continue;
-        }
         PendingRecv recv{};
         urma_jfc_t* remote_jfc = nullptr;
         {

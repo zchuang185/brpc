@@ -33,6 +33,7 @@ class RdmaEndpoint;
 namespace urma {
 class UrmaEndpoint;
 }
+
 namespace ubring {
 class UBShmEndpoint;
 }

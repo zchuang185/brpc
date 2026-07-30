@@ -16,14 +16,17 @@
 // under the License.
 
 #include <gflags/gflags.h>
+
 #include "butil/atomicops.h"
 #include "butil/logging.h"
 #include "butil/time.h"
+#include "brpc/closure_guard.h"
+#include "brpc/controller.h"
 #include "brpc/server.h"
 #include "bvar/variable.h"
 #include "test.pb.h"
 
-#ifdef BRPC_WITH_URMA
+#if BRPC_WITH_URMA
 
 DEFINE_int32(port, 8003, "TCP Port of this server");
 DEFINE_bool(use_urma, true, "Use URMA transport (true) or TCP (false)");
@@ -33,21 +36,18 @@ butil::atomic<uint64_t> g_last_time(0);
 namespace test {
 class PerfTestServiceImpl : public PerfTestService {
 public:
-    PerfTestServiceImpl() {}
-    ~PerfTestServiceImpl() {}
-
     void Test(google::protobuf::RpcController* cntl_base,
               const PerfTestRequest* request,
               PerfTestResponse* response,
               google::protobuf::Closure* done) {
-        LOG(ERROR) << "Enter server Test()";
         brpc::ClosureGuard done_guard(done);
-        uint64_t last = g_last_time.load(butil::memory_order_relaxed);
-        uint64_t now = butil::monotonic_time_us();
+        const uint64_t last =
+            g_last_time.load(butil::memory_order_relaxed);
+        const uint64_t now = butil::monotonic_time_us();
         if (now > last && now - last > 100000) {
             if (g_last_time.exchange(now, butil::memory_order_relaxed) == last) {
-                LOG(ERROR) << "Updating CPU usage";
-                response->set_cpu_usage(bvar::Variable::describe_exposed("process_cpu_usage"));
+                response->set_cpu_usage(
+                    bvar::Variable::describe_exposed("process_cpu_usage"));
             } else {
                 response->set_cpu_usage("");
             }

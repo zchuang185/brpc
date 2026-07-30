@@ -71,40 +71,80 @@ namespace v2_wire {
 
 void HelloMessage::Serialize(void* buf) const {
     uint8_t* p = static_cast<uint8_t*>(buf);
-    *(uint16_t*)p = butil::HostToNet16(msg_len);          p += 2;
-    *(uint16_t*)p = butil::HostToNet16(hello_ver);        p += 2;
-    *(uint16_t*)p = butil::HostToNet16(impl_ver);         p += 2;
-    *(uint32_t*)p = butil::HostToNet32(buffer_size);      p += 4;
-    *(uint32_t*)p = butil::HostToNet32(recv_buffer_cnt);  p += 4;
-    *(uint32_t*)p = butil::HostToNet32(jetty_id);         p += 4;
-    memcpy(p, eid, 16);                                   p += 16;
-    *(uint32_t*)p = butil::HostToNet32(uasid);            p += 4;
-    *p = tp_type;                                        p += 1;
-    memset(p, 0, 3);                                     p += 3;  // pad
-    memcpy(p, seg_eid, 16);                              p += 16;
-    *(uint32_t*)p = butil::HostToNet32(seg_uasid);       p += 4;
-    *(uint64_t*)p = butil::HostToNet64(seg_va);           p += 8;
-    *(uint64_t*)p = butil::HostToNet64(seg_len);          p += 8;
-    *(uint32_t*)p = butil::HostToNet32(seg_token_id);     p += 4;
+    auto write16 = [&p](uint16_t value) {
+        value = butil::HostToNet16(value);
+        std::memcpy(p, &value, sizeof(value));
+        p += sizeof(value);
+    };
+    auto write32 = [&p](uint32_t value) {
+        value = butil::HostToNet32(value);
+        std::memcpy(p, &value, sizeof(value));
+        p += sizeof(value);
+    };
+    auto write64 = [&p](uint64_t value) {
+        value = butil::HostToNet64(value);
+        std::memcpy(p, &value, sizeof(value));
+        p += sizeof(value);
+    };
+
+    write16(msg_len);
+    write16(hello_ver);
+    write16(impl_ver);
+    write32(buffer_size);
+    write32(recv_buffer_cnt);
+    write32(jetty_id);
+    std::memcpy(p, eid, sizeof(eid));
+    p += sizeof(eid);
+    write32(uasid);
+    *p++ = tp_type;
+    std::memset(p, 0, sizeof(pad));
+    p += sizeof(pad);
+    std::memcpy(p, seg_eid, sizeof(seg_eid));
+    p += sizeof(seg_eid);
+    write32(seg_uasid);
+    write64(seg_va);
+    write64(seg_len);
+    write32(seg_token_id);
 }
 
 void HelloMessage::Deserialize(const void* buf) {
     const uint8_t* p = static_cast<const uint8_t*>(buf);
-    msg_len         = butil::NetToHost16(*(uint16_t*)p);  p += 2;
-    hello_ver       = butil::NetToHost16(*(uint16_t*)p);  p += 2;
-    impl_ver        = butil::NetToHost16(*(uint16_t*)p);  p += 2;
-    buffer_size     = butil::NetToHost32(*(uint32_t*)p);  p += 4;
-    recv_buffer_cnt = butil::NetToHost32(*(uint32_t*)p);  p += 4;
-    jetty_id        = butil::NetToHost32(*(uint32_t*)p);  p += 4;
-    memcpy(eid, p, 16);                                    p += 16;
-    uasid           = butil::NetToHost32(*(uint32_t*)p);  p += 4;
-    tp_type         = *p;                                 p += 1;
-    p += 3;  // pad
-    memcpy(seg_eid, p, 16);                                p += 16;
-    seg_uasid       = butil::NetToHost32(*(uint32_t*)p);  p += 4;
-    seg_va          = butil::NetToHost64(*(uint64_t*)p);  p += 8;
-    seg_len         = butil::NetToHost64(*(uint64_t*)p);  p += 8;
-    seg_token_id    = butil::NetToHost32(*(uint32_t*)p);  p += 4;
+    auto read16 = [&p]() {
+        uint16_t value;
+        std::memcpy(&value, p, sizeof(value));
+        p += sizeof(value);
+        return butil::NetToHost16(value);
+    };
+    auto read32 = [&p]() {
+        uint32_t value;
+        std::memcpy(&value, p, sizeof(value));
+        p += sizeof(value);
+        return butil::NetToHost32(value);
+    };
+    auto read64 = [&p]() {
+        uint64_t value;
+        std::memcpy(&value, p, sizeof(value));
+        p += sizeof(value);
+        return butil::NetToHost64(value);
+    };
+
+    msg_len = read16();
+    hello_ver = read16();
+    impl_ver = read16();
+    buffer_size = read32();
+    recv_buffer_cnt = read32();
+    jetty_id = read32();
+    std::memcpy(eid, p, sizeof(eid));
+    p += sizeof(eid);
+    uasid = read32();
+    tp_type = *p++;
+    p += sizeof(pad);
+    std::memcpy(seg_eid, p, sizeof(seg_eid));
+    p += sizeof(seg_eid);
+    seg_uasid = read32();
+    seg_va = read64();
+    seg_len = read64();
+    seg_token_id = read32();
 }
 
 }  // namespace v2_wire
@@ -125,13 +165,21 @@ constexpr uint32_t MAX_V3_PB_SIZE = 4096;
 }  // namespace
 
 bool ValidHello(const ParsedHello& h) {
-    if (h.buffer_size < MIN_BUFFER_SIZE) { return false; }
+    if (h.buffer_size < MIN_BUFFER_SIZE) {
+        return false;
+    }
     if (h.recv_buffer_cnt < MIN_BUFFER_CNT || h.recv_buffer_cnt > MAX_BUFFER_CNT) {
         return false;
     }
-    if (h.jetty_id == 0) { return false; }
-    if (h.tp_type > static_cast<uint8_t>(URMA_UTP)) { return false; }
-    if (h.seg_len == 0 || h.seg_va == 0) { return false; }
+    if (h.jetty_id == 0) {
+        return false;
+    }
+    if (h.tp_type > static_cast<uint8_t>(URMA_UTP)) {
+        return false;
+    }
+    if (h.seg_len == 0 || h.seg_va == 0) {
+        return false;
+    }
     return true;
 }
 
@@ -141,7 +189,9 @@ bool ValidHello(const ParsedHello& h) {
 int ReadBodyAndNegotiate(UrmaEndpoint* ep, ParsedHello* out, bool* negotiated) {
     *negotiated = false;
     uint8_t body[v2_wire::HELLO_BODY_LEN];
-    if (ep->ReadFromFd(body, v2_wire::HELLO_BODY_LEN) < 0) { return -1; }
+    if (ep->ReadFromFd(body, v2_wire::HELLO_BODY_LEN) < 0) {
+        return -1;
+    }
     v2_wire::HelloMessage m;
     m.Deserialize(body);
     if (m.msg_len < v2_wire::HELLO_MSG_LEN_MIN ||
@@ -152,18 +202,22 @@ int ReadBodyAndNegotiate(UrmaEndpoint* ep, ParsedHello* out, bool* negotiated) {
     p.buffer_size = m.buffer_size;
     p.recv_buffer_cnt = m.recv_buffer_cnt;
     p.jetty_id = m.jetty_id;
-    memcpy(p.eid, m.eid, 16);
+    std::memcpy(p.eid, m.eid, 16);
     p.uasid = m.uasid;
     p.tp_type = m.tp_type;
-    memcpy(p.seg_eid, m.seg_eid, 16);
+    std::memcpy(p.seg_eid, m.seg_eid, 16);
     p.seg_uasid = m.seg_uasid;
     p.seg_va = m.seg_va;
     p.seg_len = m.seg_len;
     p.seg_token_id = m.seg_token_id;
-    if (!ValidHello(p)) { return 0; }
+    if (!ValidHello(p)) {
+        return 0;
+    }
     // Drain trailing bytes if msg_len advertises more than the fixed body.
     if (m.msg_len > v2_wire::HELLO_PACKET_LEN) {
-        if (DrainBytes(ep, m.msg_len - v2_wire::HELLO_PACKET_LEN) < 0) { return -1; }
+        if (DrainBytes(ep, m.msg_len - v2_wire::HELLO_PACKET_LEN) < 0) {
+            return -1;
+        }
     }
     *out = p;
     *negotiated = true;
@@ -174,7 +228,9 @@ int DrainBytes(UrmaEndpoint* ep, size_t n) {
     char buf[4096];
     while (n > 0) {
         size_t want = std::min(n, sizeof(buf));
-        if (ep->ReadFromFd(buf, want) < 0) { return -1; }
+        if (ep->ReadFromFd(buf, want) < 0) {
+            return -1;
+        }
         n -= want;
     }
     return 0;
@@ -188,7 +244,7 @@ int UrmaHandshakeClientV2::SendLocalHello() {
     v2_wire::HelloMessage m;
     _ep->FillLocalHelloV2(&m);
     uint8_t packet[v2_wire::HELLO_PACKET_LEN];
-    memcpy(packet, "URMA", 4);
+    std::memcpy(packet, "URMA", 4);
     m.Serialize(packet + 4);
     return _ep->WriteToFd(packet, v2_wire::HELLO_PACKET_LEN);
 }
@@ -197,8 +253,10 @@ int UrmaHandshakeClientV2::ReceiveAndParseRemoteHello(ParsedHello* out,
                                                       bool* negotiated) {
     *negotiated = false;
     uint8_t magic[v2_wire::MAGIC_STR_LEN];
-    if (_ep->ReadFromFd(magic, v2_wire::MAGIC_STR_LEN) < 0) { return -1; }
-    if (memcmp(magic, "URMA", 4) != 0) {
+    if (_ep->ReadFromFd(magic, v2_wire::MAGIC_STR_LEN) < 0) {
+        return -1;
+    }
+    if (std::memcmp(magic, "URMA", 4) != 0) {
         // Peer is not URMA-capable; push the magic back so the TCP input
         // messenger can re-parse it.
         _ep->PushBackToReadBuf(magic, v2_wire::MAGIC_STR_LEN);
@@ -226,7 +284,7 @@ int UrmaHandshakeServerV2::SendLocalHello() {
         m.buffer_size = 0;
     }
     uint8_t packet[v2_wire::HELLO_PACKET_LEN];
-    memcpy(packet, "URMA", 4);
+    std::memcpy(packet, "URMA", 4);
     m.Serialize(packet + 4);
     return _ep->WriteToFd(packet, v2_wire::HELLO_PACKET_LEN);
 }
@@ -247,8 +305,10 @@ int UrmaHandshakeClientV3::ReceiveAndParseRemoteHello(ParsedHello* out,
                                                       bool* negotiated) {
     *negotiated = false;
     uint8_t magic[v2_wire::MAGIC_STR_LEN];
-    if (_ep->ReadFromFd(magic, v2_wire::MAGIC_STR_LEN) < 0) { return -1; }
-    if (memcmp(magic, "URM3", 4) != 0) {
+    if (_ep->ReadFromFd(magic, v2_wire::MAGIC_STR_LEN) < 0) {
+        return -1;
+    }
+    if (std::memcmp(magic, "URM3", 4) != 0) {
         _ep->PushBackToReadBuf(magic, v2_wire::MAGIC_STR_LEN);
         return 0;
     }
@@ -281,10 +341,10 @@ UrmaHandshake* CreateClientHandshake(UrmaEndpoint* ep) {
 
 UrmaHandshake* CreateServerHandshakeByMagic(UrmaEndpoint* ep,
                                              const uint8_t magic[v2_wire::MAGIC_STR_LEN]) {
-    if (memcmp(magic, "URMA", 4) == 0) {
+    if (std::memcmp(magic, "URMA", 4) == 0) {
         return new UrmaHandshakeServerV2(ep);
     }
-    if (memcmp(magic, "URM3", 4) == 0) {
+    if (std::memcmp(magic, "URM3", 4) == 0) {
         return new UrmaHandshakeServerV3(ep);
     }
     return nullptr;
@@ -293,4 +353,4 @@ UrmaHandshake* CreateServerHandshakeByMagic(UrmaEndpoint* ep,
 }  // namespace urma
 }  // namespace brpc
 
-#endif  // if BRPC_WITH_URMA
+#endif  // BRPC_WITH_URMA

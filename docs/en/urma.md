@@ -9,27 +9,18 @@ for large-packet / cross-node scenarios (Route C, "double backend").
 
 ## Technical Background
 
-URMA exposes a unified verbs-style API (`urma_post_send` / `urma_post_recv`)
-over RoCE v2, InfiniBand, and PCIe P2P. Unlike RC-RDMA, URMA uses
-**connection-less UM (Unreliable Datagram) semantics** with driver-internal
-retransmission: a single Jetty can address N remote peers without the QP
-explosion that limits RC-RDMA at thousand-node scale. A Jetty bundles a send
-queue (JFS), a receive queue (JFR, optionally shared), and a completion queue
-(JFC, optionally backed by a JFCE event fd).
-
-Key advantages over RDMA in super-node (UB-bus-interconnected) clusters:
-
-- **No QP explosion**: O(N) Jetties instead of O(N x thread-count) QPs.
-- **Unified semantics**: one API across RoCE/IB/PCIe P2P (and future CXL).
-- **Hardware flow control**: Jetty-level credit replaces PFC/ECN.
-- **Performance parity with RDMA**: ~2-5us single-hop on RoCE.
+URMA exposes a verbs-style API over devices supported by UMDK. This
+implementation creates a reliable-message (`URMA_TM_RM`) Jetty with a CTP
+transport path, posts send work requests with `urma_post_jetty_send_wr`, and
+posts receive work requests with `urma_post_jfr_wr`. Completions are consumed
+from a JFC either by busy polling or through a JFCE event fd.
 
 ## Build Configuration
 
 ### Build with CMake
 
 ```bash
-# Build brpc with URMA support (requires liburma installed)
+# Build brpc with URMA support
 cmake -B build -DWITH_URMA=ON
 make -C build -j$(nproc)
 
@@ -39,9 +30,10 @@ cmake -B build
 make -C build -j$(nproc)
 ```
 
-`WITH_URMA=ON` injects `-DBRPC_WITH_URMA=1` and links `liburma`. When OFF,
-all URMA sources compile to empty stubs (matching the RDMA / UBRing pattern),
-so a URMA-less build stays clean.
+When the URMA SDK is available, `WITH_URMA=ON` adds
+`-DBRPC_WITH_URMA=1` and links `liburma`. If the SDK is unavailable, CMake
+uses the bundled mock implementation so URMA code and tests can still be
+built without hardware. The mock does not provide a hardware data path.
 
 ## Usage
 
@@ -81,7 +73,8 @@ urma::UrmaEndpoint : public SocketUser   (urma/urma_endpoint.{h,cpp})
   +-- handshake state machine (C/S symmetric, driven over the TCP fd)
   +-- send path: urma_post_jetty_send_wr(URMA_OPC_SEND)
   +-- recv path: urma_poll_jfc -> HandleCompletion -> InputMessenger
-  +-- two-window credit flow control (_remote_rq_window / _sq_window)
+  +-- two-window credit flow control
+      (_remote_rq_window_size / _sq_window_size)
 ```
 
 ### Connection establishment (dual-plane)
@@ -132,6 +125,7 @@ All flags use the `urma_` prefix (mirroring RDMA's `rdma_` prefix):
 | `--urma_prepared_jetty_cnt` | 8 | Requested pre-allocated Jetty+CQ sets; automatically capped according to `RLIMIT_NOFILE` |
 | `--urma_buffer_size` | 8192 | Per-buffer size in the pool (bytes) |
 | `--urma_buffer_count` | 65536 | Number of buffers in the pool |
+| `--urma_poller_yield` | false | Yield in the busy-poll loop |
 | `--urma_client_handshake_version` | 2 | Client wire version (2=binary, 3=protobuf) |
 
 For a device whose name starts with `bonding`, brpc configures the provider
@@ -161,6 +155,5 @@ is tracked as a future enhancement.
 
 - `baidu_std` protocol only (same as RDMA). SSL, RTMP, NSHEAD, MONGO are
   rejected at `ContextInitOrDie`.
-- Requires the openEuler UB driver + `liburma`. Non-UB platforms fall back to
-  TCP transparently.
-- Linux/openEuler only. macOS / Windows provide no-op stubs.
+- A hardware data path requires a supported UMDK provider and `liburma`.
+- The current implementation targets Linux.

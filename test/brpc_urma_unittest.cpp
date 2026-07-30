@@ -51,10 +51,14 @@ TEST(UrmaHandshakeTest, v2_serialize_deserialize_roundtrip) {
     m.buffer_size = 8192;
     m.recv_buffer_cnt = 127;
     m.jetty_id = 0x12345678;
-    for (int i = 0; i < 16; ++i) { m.eid[i] = static_cast<uint8_t>(i + 1); }
+    for (int i = 0; i < 16; ++i) {
+        m.eid[i] = static_cast<uint8_t>(i + 1);
+    }
     m.uasid = 0xdeadbeef;
     m.tp_type = 1;  // URMA_CTP
-    for (int i = 0; i < 16; ++i) { m.seg_eid[i] = static_cast<uint8_t>(16 - i); }
+    for (int i = 0; i < 16; ++i) {
+        m.seg_eid[i] = static_cast<uint8_t>(16 - i);
+    }
     m.seg_uasid = 0xcafebabe;
     m.seg_va = 0x1122334455667788ULL;
     m.seg_len = 1ULL << 20;
@@ -100,12 +104,16 @@ TEST(UrmaHandshakeTest, v3_protobuf_roundtrip) {
     msg.set_recv_buffer_cnt(127);
     msg.set_jetty_id(0x12345678);
     uint8_t eid[16];
-    for (int i = 0; i < 16; ++i) { eid[i] = static_cast<uint8_t>(i + 1); }
+    for (int i = 0; i < 16; ++i) {
+        eid[i] = static_cast<uint8_t>(i + 1);
+    }
     msg.set_eid(eid, 16);
     msg.set_uasid(0xdeadbeef);
     msg.set_tp_type(1);
     uint8_t seg_eid[16];
-    for (int i = 0; i < 16; ++i) { seg_eid[i] = static_cast<uint8_t>(16 - i); }
+    for (int i = 0; i < 16; ++i) {
+        seg_eid[i] = static_cast<uint8_t>(16 - i);
+    }
     msg.set_seg_eid(seg_eid, 16);
     msg.set_seg_uasid(0xcafebabe);
     msg.set_seg_va(0x1122334455667788ULL);
@@ -519,8 +527,8 @@ TEST_F(UrmaMockTest,
     EXPECT_EQ(13u, receiver_cr[1].imm_data);
     EXPECT_EQ(0u, receiver_cr[1].completion_len);
 
-    // Exercise the response direction as well. Production follows
-    // yalantinglibs and posts all receive WRs through the shared JFR.
+    // Exercise the response direction as well. Production posts all receive
+    // WRs through the shared JFR.
     urma_rjetty_t sender_remote = remote;
     sender_remote.jetty_id = sender->jetty_id;
     urma_target_jetty_t* sender_target =
@@ -575,13 +583,13 @@ TEST_F(UrmaMockTest,
     urma_free_device_list(devices);
 }
 
-#else  // if BRPC_WITH_URMA
+#else  // BRPC_WITH_URMA
 
 // When URMA is not compiled in, the test file is a no-op so the build stays
 // clean. The brpc_urma_unittest target still links (against brpc-shared which
 // provides the empty stubs).
 
-#endif  // if BRPC_WITH_URMA
+#endif  // BRPC_WITH_URMA
 
 int main(int argc, char** argv) {
     testing::InitGoogleTest(&argc, argv);

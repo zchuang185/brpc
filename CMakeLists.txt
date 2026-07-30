@@ -317,7 +317,6 @@ if(WITH_RDMA)
 endif()
 
 if(WITH_URMA)
-    message("brpc compile with urma")
     # Find the URMA SDK headers (urma/urma_api.h) and library.
     # If liburma is not installed, fall back to the bundled mock
     # (src/brpc/urma/mock_urma.cpp) so CI can build and test UrmaTransport
@@ -331,7 +330,8 @@ if(WITH_URMA)
         message(STATUS "Found URMA SDK: ${URMA_INCLUDE_PATH}, ${URMA_LIB}")
         set(URMA_USE_MOCK 0)
     else()
-        message(WARNING "URMA SDK not found; building UrmaTransport with the bundled mock (no real URMA hardware).")
+        message(STATUS
+            "URMA SDK not found; building with the bundled mock")
         set(URMA_USE_MOCK 1)
     endif()
 endif()
@@ -360,14 +360,13 @@ list(APPEND BRPC_COMMON_INCLUDE_DIRS
     ${PROTOBUF_INCLUDE_DIRS}
     ${LEVELDB_INCLUDE_PATH}
 )
-if(WITH_URMA AND NOT URMA_USE_MOCK)
-    list(APPEND BRPC_COMMON_INCLUDE_DIRS ${URMA_INCLUDE_PATH})
-endif()
-if(WITH_URMA AND URMA_USE_MOCK)
-    # No system URMA SDK installed: use the bundled SDK headers under
-    # src/brpc/urma/sdk/ so the transport + mock can compile.
-    list(APPEND BRPC_COMMON_INCLUDE_DIRS
-        ${PROJECT_SOURCE_DIR}/src/brpc/urma/sdk)
+if(WITH_URMA)
+    if(URMA_USE_MOCK)
+        list(APPEND BRPC_COMMON_INCLUDE_DIRS
+            ${PROJECT_SOURCE_DIR}/src/brpc/urma/sdk)
+    else()
+        list(APPEND BRPC_COMMON_INCLUDE_DIRS ${URMA_INCLUDE_PATH})
+    endif()
 endif()
 
 set(DYNAMIC_LIB
@@ -397,13 +396,12 @@ if(WITH_RDMA)
     list(APPEND DYNAMIC_LIB ${RDMA_LIB})
 endif()
 
-
 if(WITH_URMA)
-    message(STATUS "brpc compile with urma (mock=${URMA_USE_MOCK})")
+    message(STATUS "brpc compile with URMA (mock=${URMA_USE_MOCK})")
     if(NOT URMA_USE_MOCK)
         list(APPEND DYNAMIC_LIB ${URMA_LIB})
     endif()
-endif()  
+endif()
 
 if(WITH_UBRING)
     message(STATUS "brpc compile with ubring")
@@ -657,7 +655,6 @@ set(PROTO_FILES idl_options.proto
                 brpc/policy/mongo.proto
                 brpc/trackme.proto
                 brpc/streaming_rpc_meta.proto
-                brpc/proto_base.proto
                 brpc/proto_base.proto
                 brpc/rdma/rdma_handshake.proto
                 brpc/urma/urma_handshake.proto)

@@ -105,15 +105,17 @@ ssize_t UrmaTransport::CutFromIOBufList(butil::IOBuf** buf, size_t ndata) {
     }
 }
 
-int UrmaTransport::WaitEpollOut(butil::atomic<int>* _epollout_butex,
+int UrmaTransport::WaitEpollOut(butil::atomic<int>* epollout_butex,
                                 bool pollin, const timespec duetime) {
     if (_urma_state.load(butil::memory_order_acquire) == URMA_ON) {
-        const int expected_val = _epollout_butex->load(butil::memory_order_acquire);
+        const int expected_val =
+            epollout_butex->load(butil::memory_order_acquire);
         CHECK(_urma_ep != nullptr);
         if (!_urma_ep->IsWritable()) {
             // Same caveat as RDMA: URMA cannot detect failure by writing, so
             // after a failed butex wait we must re-check _socket->Failed().
-            int rc = bthread::butex_wait(_epollout_butex, expected_val, &duetime);
+            int rc =
+                bthread::butex_wait(epollout_butex, expected_val, &duetime);
             if (rc < 0 && errno != EWOULDBLOCK && errno != ETIMEDOUT) {
                 const int saved_errno = errno;
                 PLOG(ERROR) << "Fail to wait epollout butex";
@@ -128,9 +130,8 @@ int UrmaTransport::WaitEpollOut(butil::atomic<int>* _epollout_butex,
             return 0;
         }
         return 0;
-    } else {
-        return _tcp_transport->WaitEpollOut(_epollout_butex, pollin, duetime);
     }
+    return _tcp_transport->WaitEpollOut(epollout_butex, pollin, duetime);
 }
 
 void UrmaTransport::ProcessEvent(bthread_attr_t attr) {
@@ -186,18 +187,20 @@ void UrmaTransport::Debug(std::ostream& os) {
     }
 }
 
-int UrmaTransport::ContextInitOrDie(bool serverOrNot, const void* _options) {
-    if (serverOrNot) {
-        if (!OptionsAvailableOverUrma(static_cast<const ServerOptions*>(_options))) {
+int UrmaTransport::ContextInitOrDie(bool server_or_not, const void* options) {
+    if (server_or_not) {
+        if (!OptionsAvailableOverUrma(
+                static_cast<const ServerOptions*>(options))) {
             return -1;
         }
         urma::GlobalUrmaInitializeOrDie();
         if (!urma::InitPollingModeWithTag(
-                static_cast<const ServerOptions*>(_options)->bthread_tag)) {
+                static_cast<const ServerOptions*>(options)->bthread_tag)) {
             return -1;
         }
     } else {
-        if (!OptionsAvailableForUrma(static_cast<const ChannelOptions*>(_options))) {
+        if (!OptionsAvailableForUrma(
+                static_cast<const ChannelOptions*>(options))) {
             return -1;
         }
         urma::GlobalUrmaInitializeOrDie();
@@ -242,4 +245,4 @@ bool UrmaTransport::OptionsAvailableOverUrma(const ServerOptions* opt) {
 
 }  // namespace brpc
 
-#endif  // if BRPC_WITH_URMA
+#endif  // BRPC_WITH_URMA

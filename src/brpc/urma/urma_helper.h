@@ -43,9 +43,9 @@ void GlobalUrmaInitializeOrDie();
 // Initialize URMA polling mode for a given bthread tag.
 // Returns false on failure.
 bool InitPollingModeWithTag(bthread_tag_t tag,
-                            std::function<void(void)> callback = nullptr,
-                            std::function<void(void)> init_fn = nullptr,
-                            std::function<void(void)> release_fn = nullptr);
+                            std::function<void()> callback = nullptr,
+                            std::function<void()> init_fn = nullptr,
+                            std::function<void()> release_fn = nullptr);
 
 void ReleasePollingModeWithTag(bthread_tag_t tag);
 
@@ -58,19 +58,18 @@ uint64_t RegisterMemoryForUrma(void* buf, size_t len);
 // Deregister a previously registered user buffer.
 void DeregisterMemoryForUrma(void* buf);
 
-// Return the registered-segment handle for a given address, or 0 if the
-// address is not in any region managed by the URMA buffer pool or the user-mr
-// table. The handle is carried by urma_sge_t.tseg on the send path.
-uint64_t GetSegHandle(void* buf);
+// Return the target segment for a buffer-pool address. Passing nullptr returns
+// the segment backing the whole pool. Returns nullptr for any other address.
+urma_target_seg_t* GetPoolSegFor(void* buf);
 
 // Get the global URMA context (the urma_context_t created on the selected
-// device / EID). Returns NULL if URMA is not initialized.
+// device / EID). Returns nullptr if URMA is not initialized.
 urma_context_t* GetUrmaContext();
 
 // Get the EID selected when the global context was created. This is the
 // device EID that must be advertised to peers, especially for bonding
 // devices where a created jetty may expose a provider-specific physical EID.
-// Returns NULL if URMA is not initialized.
+// Returns nullptr if URMA is not initialized.
 const urma_eid_t* GetUrmaLocalEid();
 
 // Return true when the selected URMA device is a bonding provider device.
@@ -92,7 +91,7 @@ void GlobalDisableUrma();
 
 // If the given protocol is supported by UrmaTransport.
 // Currently only "baidu_std" is supported.
-bool SupportedByUrma(std::string protocol);
+bool SupportedByUrma(const std::string& protocol);
 
 // Return the configured recv buffer size (one URMA recv WR's payload size).
 size_t GetUrmaRecvBlockSize();
@@ -103,7 +102,7 @@ int GetUrmaMaxSge();
 }  // namespace urma
 }  // namespace brpc
 
-#else  // if BRPC_WITH_URMA
+#else  // BRPC_WITH_URMA
 
 namespace brpc {
 namespace urma {
@@ -115,6 +114,6 @@ void GlobalUrmaInitializeOrDie();
 }  // namespace urma
 }  // namespace brpc
 
-#endif  // if BRPC_WITH_URMA
+#endif  // BRPC_WITH_URMA
 
 #endif  // BRPC_URMA_HELPER_H

@@ -18,9 +18,8 @@
 #ifndef BRPC_URMA_HANDSHAKE_H
 #define BRPC_URMA_HANDSHAKE_H
 
+#include <cstddef>
 #include <cstdint>
-#include <cstring>
-#include <string>
 
 #if BRPC_WITH_URMA
 
@@ -39,12 +38,12 @@ struct ParsedHello {
     uint32_t buffer_size = 0;      // peer recv buffer size in bytes (per WR)
     uint32_t recv_buffer_cnt = 0;  // peer recv buffer count (RQ depth - 1)
     uint32_t jetty_id = 0;         // peer jetty id
-    uint8_t  eid[16] = {0};         // peer EID (network order)
+    uint8_t eid[16] = {0};          // peer EID (network order)
     uint32_t uasid = 0;             // peer uasid
-    uint8_t  tp_type = 0;           // urma_tp_type_t: URMA_RTP / URMA_CTP / URMA_UTP
+    uint8_t tp_type = 0;            // urma_tp_type_t: URMA_RTP / URMA_CTP / URMA_UTP
 
     // Flattened peer buffer-pool segment.
-    uint8_t  seg_eid[16] = {0};     // EID owning the peer segment
+    uint8_t seg_eid[16] = {0};      // EID owning the peer segment
     uint32_t seg_uasid = 0;         // uasid owning the peer segment
     uint64_t seg_va = 0;            // segment virtual address
     uint64_t seg_len = 0;          // segment length in bytes
@@ -77,18 +76,18 @@ struct HelloMessage {
     uint32_t buffer_size;
     uint32_t recv_buffer_cnt;
     uint32_t jetty_id;
-    uint8_t  eid[16];
+    uint8_t eid[16];
     uint32_t uasid;
-    uint8_t  tp_type;
-    uint8_t  pad[3];        // keep the struct 4-byte aligned
-    uint8_t  seg_eid[16];
+    uint8_t tp_type;
+    uint8_t pad[3];        // keep the struct 4-byte aligned
+    uint8_t seg_eid[16];
     uint32_t seg_uasid;
     uint64_t seg_va;
     uint64_t seg_len;
     uint32_t seg_token_id;
 
     void Serialize(void* buf) const;   // host -> network order, write to buf
-    void Deserialize(const void* buf); // network -> host order, read from buf
+    void Deserialize(const void* buf);  // network -> host order, read from buf
 };
 
 }  // namespace v2_wire
@@ -117,6 +116,7 @@ public:
     int ProtocolVersion() const override { return 2; }
     int SendLocalHello() override;
     int ReceiveAndParseRemoteHello(ParsedHello* out, bool* negotiated) override;
+
 private:
     UrmaEndpoint* _ep;
 };
@@ -127,6 +127,7 @@ public:
     int ProtocolVersion() const override { return 2; }
     int SendLocalHello() override;
     int ReceiveAndParseRemoteHello(ParsedHello* out, bool* negotiated) override;
+
 private:
     UrmaEndpoint* _ep;
 };
@@ -138,6 +139,7 @@ public:
     int ProtocolVersion() const override { return 3; }
     int SendLocalHello() override;
     int ReceiveAndParseRemoteHello(ParsedHello* out, bool* negotiated) override;
+
 private:
     UrmaEndpoint* _ep;
 };
@@ -148,6 +150,7 @@ public:
     int ProtocolVersion() const override { return 3; }
     int SendLocalHello() override;
     int ReceiveAndParseRemoteHello(ParsedHello* out, bool* negotiated) override;
+
 private:
     UrmaEndpoint* _ep;
 };
@@ -172,6 +175,6 @@ int ReadBodyAndNegotiate(UrmaEndpoint* ep, ParsedHello* out, bool* negotiated);
 }  // namespace urma
 }  // namespace brpc
 
-#endif  // if BRPC_WITH_URMA
+#endif  // BRPC_WITH_URMA
 
 #endif  // BRPC_URMA_HANDSHAKE_H

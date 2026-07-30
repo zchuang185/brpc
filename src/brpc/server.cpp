@@ -1136,11 +1136,11 @@ int Server::StartInternal(const butil::EndPoint& endpoint,
                 continue;
             }
             if (port_range.min_port != port_range.max_port) {
-                PLOG(ERROR) << "Fail to listen " << _listen_addr.ip
-                            << ":[" << port_range.min_port << '-'
-                            << port_range.max_port << ']';
+                LOG(ERROR) << "Fail to listen " << _listen_addr.ip
+                           << ":[" << port_range.min_port << '-'
+                           << port_range.max_port << ']';
             } else {
-                PLOG(ERROR) << "Fail to listen " << _listen_addr;
+                LOG(ERROR) << "Fail to listen " << _listen_addr;
             }
             return -1;
         }
@@ -1201,7 +1201,7 @@ int Server::StartInternal(const butil::EndPoint& endpoint,
         butil::fd_guard sockfd(tcp_listen(internal_point,
                                           SetSocketBufferOptions));
         if (sockfd < 0) {
-            PLOG(ERROR) << "Fail to listen " << internal_point << " (internal)";
+            LOG(ERROR) << "Fail to listen " << internal_point << " (internal)";
             return -1;
         }
         if (NULL == _internal_am) {

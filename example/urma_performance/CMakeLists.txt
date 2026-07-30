@@ -30,17 +30,25 @@ find_path(URMA_INCLUDE_PATH NAMES urma/urma_api.h
           PATHS /usr/include /usr/local/include
           PATH_SUFFIXES ub/umdk ub/umdk/urma umdk umdk/urma)
 find_library(URMA_LIB NAMES urma)
-if(URMA_LIB)
+if(URMA_INCLUDE_PATH AND URMA_LIB)
+    set(BRPC_EXAMPLE_URMA_SDK_FOUND ON)
     list(APPEND DYNAMIC_LIB ${URMA_LIB})
 else()
     message(STATUS
-        "liburma not found; the example requires brpc built with the bundled URMA mock")
+        "URMA SDK not found; using the URMA implementation linked into brpc")
 endif()
 
 add_executable(urma_performance_client client.cpp ${PROTO_SRC} ${PROTO_HEADER})
 brpc_example_configure_target(urma_performance_client)
 add_executable(urma_performance_server server.cpp ${PROTO_SRC} ${PROTO_HEADER})
 brpc_example_configure_target(urma_performance_server)
+
+if(BRPC_EXAMPLE_URMA_SDK_FOUND)
+    target_include_directories(urma_performance_client PRIVATE
+                               ${URMA_INCLUDE_PATH})
+    target_include_directories(urma_performance_server PRIVATE
+                               ${URMA_INCLUDE_PATH})
+endif()
 
 target_link_libraries(urma_performance_client PRIVATE ${BRPC_LIB} ${DYNAMIC_LIB})
 target_link_libraries(urma_performance_server PRIVATE ${BRPC_LIB} ${DYNAMIC_LIB})

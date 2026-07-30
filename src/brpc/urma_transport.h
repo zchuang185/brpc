@@ -18,12 +18,11 @@
 #ifndef BRPC_URMA_TRANSPORT_H
 #define BRPC_URMA_TRANSPORT_H
 
-#include "brpc/socket.h"
-#include "brpc/channel.h"
-#include "brpc/transport.h"
-
 #if BRPC_WITH_URMA
 
+#include "brpc/channel.h"
+#include "brpc/socket.h"
+#include "brpc/transport.h"
 #include "brpc/urma/urma_endpoint.h"
 
 namespace brpc {
@@ -34,13 +33,14 @@ namespace brpc {
 // the per-connection urma::UrmaEndpoint. Negotiation runs over the TCP fd and
 // resolves _urma_state to URMA_ON or URMA_OFF.
 class UrmaTransport : public Transport {
-friend class TransportFactory;
-friend class urma::UrmaEndpoint;
-friend class urma::UrmaConnect;
-friend class urma::UrmaHandshakeServerV2;
-friend class urma::UrmaHandshakeClientV2;
-friend class urma::UrmaHandshakeServerV3;
-friend class urma::UrmaHandshakeClientV3;
+    friend class TransportFactory;
+    friend class urma::UrmaEndpoint;
+    friend class urma::UrmaConnect;
+    friend class urma::UrmaHandshakeServerV2;
+    friend class urma::UrmaHandshakeClientV2;
+    friend class urma::UrmaHandshakeServerV3;
+    friend class urma::UrmaHandshakeClientV3;
+
 public:
     void Init(Socket* socket, const SocketOptions& options) override;
     void Release() override;
@@ -48,10 +48,10 @@ public:
     std::shared_ptr<AppConnect> Connect() override;
     int CutFromIOBuf(butil::IOBuf* buf) override;
     ssize_t CutFromIOBufList(butil::IOBuf** buf, size_t ndata) override;
-    int WaitEpollOut(butil::atomic<int>* _epollout_butex, bool pollin,
-                      const timespec duetime) override;
+    int WaitEpollOut(butil::atomic<int>* epollout_butex, bool pollin,
+                     const timespec duetime) override;
     void ProcessEvent(bthread_attr_t attr) override;
-    void QueueMessage(InputMessageClosure& inputMsg, int* num_bthread_created,
+    void QueueMessage(InputMessageClosure& input_msg, int* num_bthread_created,
                       bool last_msg) override;
     void Debug(std::ostream& os) override;
 
@@ -60,7 +60,7 @@ public:
         return _urma_ep;
     }
 
-    static int ContextInitOrDie(bool serverOrNot, const void* _options);
+    static int ContextInitOrDie(bool server_or_not, const void* options);
 
 private:
     static bool OptionsAvailableForUrma(const ChannelOptions* opt);
@@ -80,5 +80,5 @@ private:
 
 }  // namespace brpc
 
-#endif  // if BRPC_WITH_URMA
+#endif  // BRPC_WITH_URMA
 #endif  // BRPC_URMA_TRANSPORT_H

@@ -20,12 +20,13 @@
 
 #include <cstdint>
 #include <functional>
+#include <ostream>
 #include <vector>
 
 #include "butil/atomicops.h"
+#include "butil/containers/mpsc_queue.h"
 #include "butil/iobuf.h"
 #include "butil/macros.h"
-#include "butil/containers/mpsc_queue.h"
 #include "butil/synchronization/lock.h"
 #include "bthread/types.h"
 
@@ -106,8 +107,8 @@ class BAIDU_CACHELINE_ALIGNMENT UrmaEndpoint : public SocketUser {
     friend class UrmaHandshakeServerV2;
     friend class UrmaHandshakeClientV3;
     friend class UrmaHandshakeServerV3;
-    friend int  DrainBytes(UrmaEndpoint*, size_t);
-    friend int  ReadBodyAndNegotiate(UrmaEndpoint*, ParsedHello*, bool*);
+    friend int DrainBytes(UrmaEndpoint*, size_t);
+    friend int ReadBodyAndNegotiate(UrmaEndpoint*, ParsedHello*, bool*);
 
 public:
     explicit UrmaEndpoint(Socket* s);
@@ -152,9 +153,9 @@ public:
 
     // Initialize the per-tag polling infrastructure (polling mode).
     static int PollingModeInitialize(bthread_tag_t tag,
-                                     std::function<void(void)> callback,
-                                     std::function<void(void)> init_fn,
-                                     std::function<void(void)> release_fn);
+                                     std::function<void()> callback,
+                                     std::function<void()> init_fn,
+                                     std::function<void()> release_fn);
     static void PollingModeRelease(bthread_tag_t tag);
 
     // ---- Handshake IO helpers (also used by urma_handshake.cpp) ----
@@ -264,9 +265,6 @@ private:
     // Construct a ParsedHello from local state (used by SendLocalHello).
     void MakeLocalParsedHello(ParsedHello* out) const;
 
-    // Bring the jetty from RESET to READY (URMA jetty state machine).
-    int BringUpJetty();
-
     std::string GetStateStr() const;
 
     // Not owned.
@@ -306,17 +304,11 @@ private:
     butil::atomic<uint16_t> _new_rq_wrs{0};              // new recv WRs (to ack)
     uint16_t _sq_imm_window_size{0};                     // budget for pure-ack WRs
 
-    // SQ producer / signaled / consumer indices.
+    // SQ producer / consumer indices.
     uint16_t _sq_current{0};
-    uint16_t _sq_unsignaled{0};
     uint16_t _sq_sent{0};
     // RQ consumer index.
     uint16_t _rq_received{0};
-
-    // Batched receive-credit ACK counters.
-    uint16_t _accumulated_ack{0};
-    uint16_t _unsolicited{0};
-    uint32_t _unsolicited_bytes{0};
 
     // Butex for waking the handshake bthread parked in ReadFromFd.
     butil::atomic<int>* _read_butex{nullptr};
@@ -350,7 +342,7 @@ private:
 }  // namespace urma
 }  // namespace brpc
 
-#else  // if BRPC_WITH_URMA
+#else  // BRPC_WITH_URMA
 
 namespace brpc {
 namespace urma {
@@ -358,6 +350,6 @@ class UrmaEndpoint {};
 }  // namespace urma
 }  // namespace brpc
 
-#endif  // if BRPC_WITH_URMA
+#endif  // BRPC_WITH_URMA
 
 #endif  // BRPC_URMA_ENDPOINT_H

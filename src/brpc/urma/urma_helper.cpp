@@ -65,8 +65,6 @@ DEFINE_int32(urma_poller_num, 1,
              "Number of poller bthreads per bthread tag (polling mode only)");
 DEFINE_bool(urma_disable_bthread, false,
             "Run the message-processing callback inline (no bthread spawned)");
-DEFINE_bool(urma_trace_verbose, false,
-            "Print verbose logs for URMA handshake and completions");
 
 DEFINE_int32(urma_sq_size, 128,
              "Depth of the local send jetty (JFS). [16, 4096]");
@@ -82,35 +80,26 @@ DEFINE_int32(urma_zerocopy_min_size, 512,
 DEFINE_string(urma_device, "",
               "The name of the URMA device to use. Empty means the first one.");
 DEFINE_int32(urma_max_sge, 0,
-              "Max SGEs per WR. 0 means the device maximum.");
+             "Max SGEs per WR. 0 means the device maximum.");
 DEFINE_int32(urma_bonding_mode, 0,
-              "Bonding mode for bonding devices: 0=standalone, "
-              "1=active-backup, 2=balance.");
+             "Bonding mode for bonding devices: 0=standalone, "
+             "1=active-backup, 2=balance.");
 DEFINE_int32(urma_bonding_level, 0,
-              "Bonding level for bonding devices: 0=IODIE, 1=port.");
+             "Bonding level for bonding devices: 0=IODIE, 1=port.");
 DEFINE_int32(urma_prepared_jetty_cnt, 8,
-              "Requested number of pre-allocated Jetty+CQ sets for fast "
-              "connect; capped automatically according to RLIMIT_NOFILE");
+             "Requested number of pre-allocated Jetty+CQ sets for fast "
+             "connect; capped automatically according to RLIMIT_NOFILE");
 
 DEFINE_int32(urma_buffer_size, 8 * 1024,
-              "Per-buffer size in the URMA buffer pool (bytes). "
-              "Must match IOBuf block size to keep zero-copy working.");
+             "Per-buffer size in the URMA buffer pool (bytes). "
+             "Must match IOBuf block size to keep zero-copy working.");
 DEFINE_int32(urma_buffer_count, 65536,
-              "Number of buffers in the URMA buffer pool.");
-DEFINE_bool(urma_buffer_pool_user_specified, false,
-              "If true, the pool is not auto-grown; user must call "
-              "ExtendUrmaBufferPoolByUser.");
+             "Number of buffers in the URMA buffer pool.");
 
 DEFINE_bool(urma_poller_yield, false,
-              "Yield (bthread_yield) in the busy poll loop to let other "
-              "bthreads run");
+            "Yield (bthread_yield) in the busy poll loop to let other "
+            "bthreads run");
 
-DEFINE_bool(urma_event_mode, true,
-              "Use JFCE event mode (true) or busy polling (false). "
-              "Only effective when --urma_use_polling is false.");
-
-// EAGAIN-like errno used by the send path to signal window-full.
-constexpr int kErrnoUrmaWindowFull = EAGAIN;
 constexpr size_t kIOBufBlockHeaderLen = 32;
 
 // Set to true to skip real URMA hardware initialization (unit tests). When
@@ -131,8 +120,8 @@ static urma_device_attr_t g_device_attr{};
 static int g_max_sge = 1;
 static size_t g_recv_block_size = 8 * 1024;
 static bool g_is_bonding_device = false;
-// Yalanting uses priority 6 for CTP. Prefer the device capability table when
-// available, and retain 6 as the compatibility fallback.
+// Prefer the device capability table and retain priority 6 as a compatibility
+// fallback for CTP providers that do not report a priority.
 static uint8_t g_jetty_priority = 6;
 // urma_init/urma_uninit manage process-global liburma state. Only uninitialize
 // it when this helper performed the successful initialization; URMA_EEXIST
@@ -201,10 +190,6 @@ bool ConfigureBondingMode(const std::string& device_name) {
     g_is_bonding_device =
         IsBondingDeviceName(device_name.c_str()) ||
         IsBondingDeviceName(context_device_name);
-    LOG(INFO) << "URMA device mode detected: selected_device=" << device_name
-              << " context_device="
-              << (context_device_name != nullptr ? context_device_name : "<null>")
-              << " bonding=" << g_is_bonding_device;
     if (!g_is_bonding_device) {
         return true;
     }
@@ -242,9 +227,6 @@ bool ConfigureBondingMode(const std::string& device_name) {
         errno = status > 0 ? status : EIO;
         return false;
     }
-    LOG(INFO) << "URMA bonding mode configured: device=" << device_name
-              << " mode=" << FLAGS_urma_bonding_mode
-              << " level=" << FLAGS_urma_bonding_level;
     return true;
 #else
     LOG(ERROR) << "URMA bonding device " << device_name
@@ -262,7 +244,7 @@ bool ConfigureBondingMode(const std::string& device_name) {
 
 namespace {
 
-// Free list with 64 shards to reduce contention (modeled on yalantinglibs).
+// Shard the free list to reduce contention between allocator threads.
 constexpr size_t kShardCount = 64;
 struct BufferPool {
     butil::Mutex mutexes[kShardCount];
@@ -304,23 +286,31 @@ void* PoolAllocate(size_t size) {
         auto shard = (start + i) % kShardCount;
         BAIDU_SCOPED_LOCK(g_pool->mutexes[shard]);
         auto& fl = g_pool->free_lists[shard];
-        if (fl.empty()) { continue; }
+        if (fl.empty()) {
+            continue;
+        }
         void* buf = fl.back();
         fl.pop_back();
         auto idx = (static_cast<char*>(buf) -
                     static_cast<char*>(g_pool_base)) / g_pool_buffer_size;
-        if (idx < g_pool->in_use.size()) { g_pool->in_use[idx] = 1; }
+        if (idx < g_pool->in_use.size()) {
+            g_pool->in_use[idx] = 1;
+        }
         g_pool->outstanding.fetch_add(1, butil::memory_order_relaxed);
         return buf;
     }
-    LOG(WARNING) << "URMA buffer pool exhausted; falling back to malloc";
+    LOG_EVERY_SECOND(WARNING)
+        << "URMA buffer pool exhausted; falling back to malloc";
     return g_mem_alloc_orig ? g_mem_alloc_orig(size) : malloc(size);
 }
 
 void PoolDeallocate(void* buf) {
     if (BAIDU_UNLIKELY(g_skip_urma_init)) {
-        if (g_mem_dealloc_orig) { g_mem_dealloc_orig(buf); }
-        else { free(buf); }
+        if (g_mem_dealloc_orig) {
+            g_mem_dealloc_orig(buf);
+        } else {
+            free(buf);
+        }
         return;
     }
     auto* base = static_cast<char*>(g_pool_base);
@@ -328,8 +318,11 @@ void PoolDeallocate(void* buf) {
     if (!base || p < base || p >= base + g_pool_size ||
         static_cast<size_t>(p - base) % g_pool_buffer_size != 0) {
         // Not a pool buffer -- hand back to the original allocator.
-        if (g_mem_dealloc_orig) { g_mem_dealloc_orig(buf); }
-        else { free(buf); }
+        if (g_mem_dealloc_orig) {
+            g_mem_dealloc_orig(buf);
+        } else {
+            free(buf);
+        }
         return;
     }
     auto shard = ShardFor(buf);
@@ -350,9 +343,13 @@ void PoolDeallocate(void* buf) {
 
 // Register the pool: mmap one large region and urma_register_seg it.
 bool InitPool() {
-    if (g_pool_buffer_size == 0 || g_pool == nullptr) { return false; }
+    if (g_pool_buffer_size == 0 || g_pool == nullptr) {
+        return false;
+    }
     size_t count = g_pool->buffer_count();
-    if (count == 0) { return false; }
+    if (count == 0) {
+        return false;
+    }
     size_t raw = g_pool_buffer_size * count;
     size_t page = PageSize();
     g_pool_size = AlignUp(raw, page);
@@ -393,8 +390,6 @@ bool InitPool() {
         g_pool->free_lists[shard].push_back(
             static_cast<char*>(g_pool_base) + i * g_pool_buffer_size);
     }
-    LOG(INFO) << "URMA buffer pool ready: " << count << " buffers of "
-              << g_pool_buffer_size << " bytes, one segment of " << g_pool_size;
     return true;
 }
 
@@ -404,8 +399,12 @@ bool InitPool() {
 // All pool buffers share the same segment, so we return g_pool_seg for any
 // pool address; the per-WR length selects the slice.
 urma_target_seg_t* GetPoolSegFor(void* buf) {
-    if (g_skip_urma_init || !g_pool_seg || !g_pool_base) { return nullptr; }
-    if (buf == nullptr) { return g_pool_seg; }
+    if (g_skip_urma_init || !g_pool_seg || !g_pool_base) {
+        return nullptr;
+    }
+    if (buf == nullptr) {
+        return g_pool_seg;
+    }
     const uintptr_t base = reinterpret_cast<uintptr_t>(g_pool_base);
     const uintptr_t p = reinterpret_cast<uintptr_t>(buf);
     if (p >= base && p - base < g_pool_size) {
@@ -533,15 +532,9 @@ static bool GlobalUrmaInitializeImpl() {
         g_jetty_priority = static_cast<uint8_t>(ctp_priority);
     } else {
         LOG(WARNING) << "URMA device does not report a CTP priority; "
-                        "falling back to Yalanting-compatible priority "
+                        "falling back to compatibility priority "
                      << static_cast<unsigned>(g_jetty_priority);
     }
-    const auto& selected_priority =
-        g_device_attr.dev_cap.priority_info[g_jetty_priority];
-    LOG(INFO) << "URMA selected CTP jetty priority="
-              << static_cast<unsigned>(g_jetty_priority)
-              << " tp_cap=" << selected_priority.tp_type.value
-              << " sl=" << selected_priority.SL;
     uint32_t eid_cnt = 0;
     urma_eid_info_t* eids = urma_get_eid_list(found, &eid_cnt);
     if (!eids || eid_cnt == 0) {
@@ -551,10 +544,9 @@ static bool GlobalUrmaInitializeImpl() {
         g_device = nullptr;
         return false;
     }
-    // Retain the exact EID used to create the context. Yalanting advertises
-    // this device EID during its handshake instead of jetty_id.eid. The
-    // distinction matters for a bonding virtual device whose jetty can carry
-    // a provider-selected physical EID.
+    // Retain the exact EID used to create the context and advertise it in the
+    // handshake. This matters for a bonding virtual device whose jetty can
+    // carry a provider-selected physical EID.
     g_local_eid = eids[0].eid;
     g_has_local_eid = true;
     g_context = urma_create_context(found, eids[0].eid_index);
@@ -571,9 +563,13 @@ static bool GlobalUrmaInitializeImpl() {
         return false;
     }
     uint32_t device_max_sge = g_device_attr.dev_cap.max_jfs_sge;
-    if (device_max_sge == 0) { device_max_sge = 1; }
+    if (device_max_sge == 0) {
+        device_max_sge = 1;
+    }
     // urma_jfs_cfg_t::max_sge is uint8_t.
-    if (device_max_sge > 255) { device_max_sge = 255; }
+    if (device_max_sge > 255) {
+        device_max_sge = 255;
+    }
     g_max_sge = static_cast<int>(device_max_sge);
     if (FLAGS_urma_max_sge > 0) {
         if (FLAGS_urma_max_sge > g_max_sge) {
@@ -644,7 +640,9 @@ static butil::Mutex g_init_mutex;
 
 void GlobalUrmaInitializeOrDie() {
     int expected = 0;
-    if (g_init_once.load(butil::memory_order_acquire) == 2) { return; }
+    if (g_init_once.load(butil::memory_order_acquire) == 2) {
+        return;
+    }
     if (g_init_once.compare_exchange_strong(expected, 1,
                                              butil::memory_order_acq_rel)) {
         BAIDU_SCOPED_LOCK(g_init_mutex);
@@ -669,7 +667,7 @@ void GlobalDisableUrma() {
     g_urma_available.store(false, butil::memory_order_release);
 }
 
-bool SupportedByUrma(std::string protocol) {
+bool SupportedByUrma(const std::string& protocol) {
     return protocol == "baidu_std";
 }
 
@@ -698,10 +696,12 @@ size_t GetUrmaRecvBlockSize() { return g_recv_block_size; }
 // ============================================================================
 
 bool InitPollingModeWithTag(bthread_tag_t tag,
-                            std::function<void(void)> callback,
-                            std::function<void(void)> init_fn,
-                            std::function<void(void)> release_fn) {
-    if (BAIDU_UNLIKELY(g_skip_urma_init)) { return true; }
+                            std::function<void()> callback,
+                            std::function<void()> init_fn,
+                            std::function<void()> release_fn) {
+    if (BAIDU_UNLIKELY(g_skip_urma_init)) {
+        return true;
+    }
     return UrmaEndpoint::PollingModeInitialize(
                tag, std::move(callback), std::move(init_fn),
                std::move(release_fn)) == 0;
@@ -716,7 +716,9 @@ void ReleasePollingModeWithTag(bthread_tag_t tag) {
 // ============================================================================
 
 uint64_t RegisterMemoryForUrma(void* buf, size_t len) {
-    if (BAIDU_UNLIKELY(g_skip_urma_init) || !g_context) { return 0; }
+    if (BAIDU_UNLIKELY(g_skip_urma_init) || !g_context) {
+        return 0;
+    }
     urma_reg_seg_flag_t flag{};
     flag.bs.token_policy = URMA_TOKEN_NONE;
     flag.bs.cacheable = URMA_NON_CACHEABLE;
@@ -751,44 +753,22 @@ uint64_t RegisterMemoryForUrma(void* buf, size_t len) {
 }
 
 void DeregisterMemoryForUrma(void* buf) {
-    if (BAIDU_UNLIKELY(g_skip_urma_init) || !g_user_segs) { return; }
+    if (BAIDU_UNLIKELY(g_skip_urma_init) || !g_user_segs) {
+        return;
+    }
     BAIDU_SCOPED_LOCK(*g_user_segs_lock);
     UserSeg* us = g_user_segs->seek(buf);
-    if (!us) { return; }
+    if (!us) {
+        return;
+    }
     urma_unregister_seg(us->tseg);
     g_user_segs->erase(buf);
-}
-
-uint64_t GetSegHandle(void* buf) {
-    // Pool buffer?
-    if (g_pool_seg) {
-        const uintptr_t base = reinterpret_cast<uintptr_t>(g_pool_base);
-        const uintptr_t p = reinterpret_cast<uintptr_t>(buf);
-        if (p >= base && p - base < g_pool_size) {
-            return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(g_pool_seg));
-        }
-    }
-    // User-registered buffer?
-    if (g_user_segs) {
-        BAIDU_SCOPED_LOCK(*g_user_segs_lock);
-        // Find the segment whose [base, base+len) contains buf.
-        for (auto it = g_user_segs->begin(); it != g_user_segs->end(); ++it) {
-            const uintptr_t base =
-                reinterpret_cast<uintptr_t>(it->second.base);
-            const uintptr_t p = reinterpret_cast<uintptr_t>(buf);
-            if (p >= base && p - base < it->second.len) {
-                return static_cast<uint64_t>(
-                    reinterpret_cast<uintptr_t>(it->second.tseg));
-            }
-        }
-    }
-    return 0;
 }
 
 }  // namespace urma
 }  // namespace brpc
 
-#else  // if BRPC_WITH_URMA
+#else  // BRPC_WITH_URMA
 
 #include <cstdlib>
 
@@ -805,4 +785,4 @@ void GlobalUrmaInitializeOrDie() {
 }  // namespace urma
 }  // namespace brpc
 
-#endif  // if BRPC_WITH_URMA
+#endif  // BRPC_WITH_URMA

@@ -17,20 +17,23 @@
 
 #include <stdlib.h>
 #include <unistd.h>
+
 #include <cstdint>
 #include <vector>
+
 #include <gflags/gflags.h>
+
 #include "butil/atomicops.h"
 #include "butil/fast_rand.h"
 #include "butil/logging.h"
-#include "brpc/server.h"
 #include "brpc/channel.h"
+#include "brpc/controller.h"
 #include "bthread/bthread.h"
 #include "bvar/latency_recorder.h"
 #include "bvar/variable.h"
 #include "test.pb.h"
 
-#ifdef BRPC_WITH_URMA
+#if BRPC_WITH_URMA
 
 DEFINE_string(server, "127.0.0.1:8003", "IP Port of urma performance server");
 DEFINE_int32(thread_num, 0, "How many threads are used");
@@ -57,7 +60,7 @@ static void* worker(void* arg) {
         std::vector<test::PerfTestResponse> resps(FLAGS_queue_depth);
         std::vector<brpc::CallId> ids(FLAGS_queue_depth);
         for (int i = 0; i < FLAGS_queue_depth; ++i) {
-            cntls[i].set_log_id(butil::fast_rand() & 0x7fffffff);
+            cntls[i].set_log_id(butil::fast_rand(&seed) & 0x7fffffff);
             reqs[i].set_echo_attachment(FLAGS_echo_attachment);
             if (FLAGS_attachment_size >= 0) {
                 cntls[i].request_attachment().resize(FLAGS_attachment_size, 'a');

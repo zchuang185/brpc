@@ -10,26 +10,17 @@ UrmaTransport 是使用 openEuler
 
 ## 技术背景
 
-URMA 在 RoCE v2、InfiniBand、PCIe P2P 之上提供统一的 verbs 风格接口
-（`urma_post_send` / `urma_post_recv`）。与 RC-RDMA 不同，URMA 采用
-**无连接 UM（Unreliable Datagram）语义**，驱动内置重传：单个 Jetty 即可
-寻址 N 个远端，避免了 RC-RDMA 在千节点规模下的 QP 爆炸问题。一个 Jetty
-聚合了发送队列（JFS）、接收队列（JFR，可共享）和完成队列（JFC，可由 JFCE
-事件 fd 支持）。
-
-在超节点（UB 总线互联的集群）场景下，相较 RDMA 的优势：
-
-- **无 QP 爆炸**：O(N) 个 Jetty 替代 O(N×线程数) 个 QP。
-- **统一语义**：一套 API 覆盖 RoCE/IB/PCIe P2P（未来可平滑切换 CXL）。
-- **硬件流控**：Jetty 级信用替代 PFC/ECN。
-- **性能对标 RDMA**：RoCE 上单跳 ~2-5μs。
+URMA 在 UMDK 支持的设备上提供 verbs 风格接口。当前实现创建可靠消息
+（`URMA_TM_RM`）Jetty，并使用 CTP 传输路径；通过
+`urma_post_jetty_send_wr` 提交发送 WR，通过 `urma_post_jfr_wr` 提交接收
+WR。完成事件既可由 JFC 忙轮询获取，也可通过 JFCE 事件 fd 获取。
 
 ## 编译配置
 
 ### CMake 编译
 
 ```bash
-# 带 URMA 支持编译 brpc（需要已安装 liburma）
+# 带 URMA 支持编译 brpc
 cmake -B build -DWITH_URMA=ON
 make -C build -j$(nproc)
 
@@ -39,8 +30,9 @@ cmake -B build
 make -C build -j$(nproc)
 ```
 
-`WITH_URMA=ON` 注入 `-DBRPC_WITH_URMA=1` 并链接 `liburma`。关闭时所有
-URMA 源码编译为空 stub（与 RDMA / UBRing 一致），非 URMA 构建保持干净。
+若系统存在 URMA SDK，`WITH_URMA=ON` 会添加 `-DBRPC_WITH_URMA=1` 并链接
+`liburma`。SDK 不存在时，CMake 使用仓库内置 mock，使 URMA 代码和测试仍可
+在无硬件环境编译；mock 不提供硬件数据通路。
 
 ## 使用
 
@@ -76,9 +68,9 @@ UrmaTransport : public Transport         (urma_transport.{h,cpp})
 urma::UrmaEndpoint : public SocketUser   (urma/urma_endpoint.{h,cpp})
   +-- UrmaResource { jfc, jfce, jfr, jetty, remote_jetty, remote_seg }
   +-- 握手状态机（C/S 对称，在 TCP fd 上驱动）
-  +-- 发送路径：urma_post_jetty_send_wr(URMA_OPC_SEND_IMM)
+  +-- 发送路径：urma_post_jetty_send_wr(URMA_OPC_SEND)
   +-- 接收路径：urma_poll_jfc -> HandleCompletion -> InputMessenger
-  +-- 双窗口信用流控（_remote_rq_window / _sq_window）
+  +-- 双窗口信用流控（_remote_rq_window_size / _sq_window_size）
 ```
 
 ### 建链流程（双平面）
@@ -120,10 +112,17 @@ block 都由注册 segment 支撑，发送路径可直接从 IOBuf block refs �
 | `--urma_zerocopy_min_size` | 512 | 小于此值的接收拷贝 |
 | `--urma_device` | "" | URMA 设备名（空=首个） |
 | `--urma_max_sge` | 0 | 每 WR SGE 上限（0=设备上限） |
+| `--urma_bonding_mode` | 0 | bonding 模式：0=standalone，1=active-backup，2=balance |
+| `--urma_bonding_level` | 0 | bonding 层级：0=IODIE，1=port |
 | `--urma_prepared_jetty_cnt` | 8 | 预连接 Jetty+CQ 请求数量；会根据 `RLIMIT_NOFILE` 自动限制 |
 | `--urma_buffer_size` | 8192 | 池中每个 buffer 大小（字节） |
 | `--urma_buffer_count` | 65536 | 池中 buffer 数量 |
+| `--urma_poller_yield` | false | 忙轮询循环中主动让出 bthread |
 | `--urma_client_handshake_version` | 2 | 客户端握手版本（2=二进制，3=protobuf） |
+
+设备名以 `bonding` 开头时，brpc 会在创建 context 后、创建 segment 和队列
+前配置 provider。默认 standalone+IODIE 配置与 UMDK 性能工具保持一致。
+bonding 支持需要 provider 扩展头文件 `urma/urma_ubagg.h`。
 
 ## 与 UBRing 协同
 
@@ -144,5 +143,5 @@ UrmaTransport 推荐用于**大包和跨节点**高吞吐路径，而 UBRing
 
 - 仅支持 `baidu_std` 协议（与 RDMA 一致）。SSL、RTMP、NSHEAD、MONGO 在
   `ContextInitOrDie` 阶段拒绝。
-- 需要 openEuler UB 驱动 + `liburma`。非 UB 平台透明回退 TCP。
-- 仅支持 Linux/openEuler。macOS/Windows 提供空 stub。
+- 硬件数据通路需要受支持的 UMDK provider 和 `liburma`。
+- 当前实现面向 Linux。

@@ -28,6 +28,9 @@ option(WITH_BTHREAD_TRACER "With bthread tracer supported" OFF)
 option(WITH_SNAPPY "With snappy" OFF)
 option(WITH_RDMA "With RDMA" OFF)
 option(WITH_URMA "With URMA (openEuler Unified Remote Memory Access)" OFF)
+option(DOWNLOAD_URMA_HEADERS
+       "Download UMDK headers when WITH_URMA is enabled and headers are absent"
+       ON)
 option(WITH_UBRING "With UB" OFF)
 option(WITH_DEBUG_BTHREAD_SCHE_SAFETY "With debugging bthread sche safety" OFF)
 option(WITH_DEBUG_LOCK "With debugging lock" OFF)
@@ -317,21 +320,51 @@ if(WITH_RDMA)
 endif()
 
 if(WITH_URMA)
-    # Find the URMA SDK headers (urma/urma_api.h) and library.
-    # If liburma is not installed, fall back to the bundled mock
-    # (src/brpc/urma/mock_urma.cpp) so CI can build and test UrmaTransport
-    # on hosts without URMA hardware. The mock provides link-time stubs of
-    # every urma_* symbol the transport calls.
-    find_path(URMA_INCLUDE_PATH NAMES urma/urma_api.h
+    # UrmaTransport and its link-time mock both compile against the upstream
+    # UMDK API. Prefer installed headers; otherwise fetch a pinned upstream
+    # release, following Mooncake's URMA mock setup.
+    find_path(URMA_INCLUDE_PATH NAMES urma_api.h
+              HINTS ENV URMA_ROOT
               PATHS /usr/include /usr/local/include
-              PATH_SUFFIXES ub/umdk ub/umdk/urma umdk umdk/urma)
-    find_library(URMA_LIB NAMES urma)
-    if(URMA_INCLUDE_PATH AND URMA_LIB)
-        message(STATUS "Found URMA SDK: ${URMA_INCLUDE_PATH}, ${URMA_LIB}")
+              PATH_SUFFIXES ub/umdk/urma umdk/urma urma
+                            src/urma/lib/urma/core/include)
+    find_path(URMA_BOND_INCLUDE_PATH NAMES urma_ubagg.h
+              HINTS ENV URMA_ROOT
+              PATHS /usr/include /usr/local/include
+              PATH_SUFFIXES ub/umdk/urma umdk/urma urma
+                            src/urma/lib/urma/bond/include)
+    if(NOT URMA_INCLUDE_PATH AND DOWNLOAD_URMA_HEADERS)
+        include(FetchContent)
+        FetchContent_Declare(
+            urma_headers
+            GIT_REPOSITORY https://atomgit.com/openeuler/umdk.git
+            GIT_TAG v26.06.0_CAM
+            GIT_SHALLOW TRUE)
+        FetchContent_GetProperties(urma_headers)
+        if(NOT urma_headers_POPULATED)
+            FetchContent_Populate(urma_headers)
+        endif()
+        set(URMA_INCLUDE_PATH
+            "${urma_headers_SOURCE_DIR}/src/urma/lib/urma/core/include")
+        set(URMA_BOND_INCLUDE_PATH
+            "${urma_headers_SOURCE_DIR}/src/urma/lib/urma/bond/include")
+        message(STATUS "Using downloaded UMDK headers: ${URMA_INCLUDE_PATH}")
+    endif()
+    if(NOT URMA_INCLUDE_PATH)
+        message(FATAL_ERROR
+            "Fail to find urma_api.h. Install UMDK headers, set URMA_ROOT, "
+            "or enable DOWNLOAD_URMA_HEADERS.")
+    endif()
+
+    find_library(URMA_LIB NAMES urma
+                 HINTS ENV URMA_ROOT
+                 PATH_SUFFIXES lib lib64)
+    if(URMA_LIB)
+        message(STATUS "Found URMA library: ${URMA_LIB}")
         set(URMA_USE_MOCK 0)
     else()
         message(STATUS
-            "URMA SDK not found; building with the bundled mock")
+            "liburma not found; building with the URMA link-time mock")
         set(URMA_USE_MOCK 1)
     endif()
 endif()
@@ -361,11 +394,9 @@ list(APPEND BRPC_COMMON_INCLUDE_DIRS
     ${LEVELDB_INCLUDE_PATH}
 )
 if(WITH_URMA)
-    if(URMA_USE_MOCK)
-        list(APPEND BRPC_COMMON_INCLUDE_DIRS
-            ${PROJECT_SOURCE_DIR}/src/brpc/urma/sdk)
-    else()
-        list(APPEND BRPC_COMMON_INCLUDE_DIRS ${URMA_INCLUDE_PATH})
+    list(APPEND BRPC_COMMON_INCLUDE_DIRS ${URMA_INCLUDE_PATH})
+    if(URMA_BOND_INCLUDE_PATH)
+        list(APPEND BRPC_COMMON_INCLUDE_DIRS ${URMA_BOND_INCLUDE_PATH})
     endif()
 endif()
 
@@ -608,9 +639,9 @@ file(GLOB_RECURSE BRPC_SOURCES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/src/brpc
 file(GLOB_RECURSE THRIFT_SOURCES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/src/brpc/thrift*.cpp")
 file(GLOB_RECURSE EXCLUDE_SOURCES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/src/brpc/event_dispatcher_*.cpp")
 
-# When building with the real liburma, exclude the bundled mock so its urma_*
+# When building with the real liburma, exclude the link-time mock so its urma_*
 # symbols do not clash with the library. When liburma is absent, keep it so CI
-# can build/test UrmaTransport without URMA hardware.
+# can build and test UrmaTransport without URMA hardware.
 if(WITH_URMA AND NOT URMA_USE_MOCK)
     list(REMOVE_ITEM BRPC_SOURCES
          "${PROJECT_SOURCE_DIR}/src/brpc/urma/mock_urma.cpp")

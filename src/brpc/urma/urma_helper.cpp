@@ -41,8 +41,8 @@
 #include "butil/scoped_lock.h"
 #include "butil/synchronization/lock.h"
 
-#include "urma/urma_api.h"
-#include "urma/urma_types.h"
+#include "urma_api.h"
+#include "urma_types.h"
 #include "brpc/urma/urma_bonding.h"
 #include "brpc/urma/urma_endpoint.h"
 
@@ -230,7 +230,7 @@ bool ConfigureBondingMode(const std::string& device_name) {
     return true;
 #else
     LOG(ERROR) << "URMA bonding device " << device_name
-               << " requires provider header urma/urma_ubagg.h";
+               << " requires provider header urma_ubagg.h";
     errno = ENOTSUP;
     return false;
 #endif

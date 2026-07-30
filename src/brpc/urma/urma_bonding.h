@@ -19,11 +19,11 @@
 #define BRPC_URMA_URMA_BONDING_H
 
 // urma_ubagg.h is a provider-private extension and is not shipped by every
-// URMA SDK (including brpc's bundled mock SDK). Keep the dependency optional
-// so non-bonding devices and mock builds continue to work.
+// UMDK installation. Keep the dependency optional so non-bonding devices and
+// mock builds continue to work.
 #if defined(__has_include)
-#if __has_include("urma/urma_ubagg.h")
-#include "urma/urma_ubagg.h"
+#if __has_include("urma_ubagg.h")
+#include "urma_ubagg.h"
 #define BRPC_URMA_HAS_BONDING_EXT 1
 #endif
 #endif

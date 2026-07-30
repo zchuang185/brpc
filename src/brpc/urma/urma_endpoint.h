@@ -34,8 +34,8 @@
 
 #if BRPC_WITH_URMA
 
-#include "urma/urma_api.h"
-#include "urma/urma_types.h"
+#include "urma_api.h"
+#include "urma_types.h"
 #include "brpc/urma/urma_handshake.h"
 #include "brpc/urma/urma_handshake.pb.h"
 

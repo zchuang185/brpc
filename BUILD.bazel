@@ -551,14 +551,7 @@ cc_library(
         "src/brpc/event_dispatcher_kqueue.cpp",
     ]),
     copts = COPTS,
-    includes = [
-        "src/",
-    ] + select({
-        "//bazel/config:brpc_with_urma": [
-            "src/brpc/urma/sdk/",
-        ],
-        "//conditions:default": [],
-    }),
+    includes = ["src/"],
     linkopts = LINKOPTS,
     visibility = ["//visibility:public"],
     deps = [
@@ -570,6 +563,11 @@ cc_library(
         ":mcpack2pb",
         "@com_github_google_leveldb//:leveldb",
     ] + select({
+        "//bazel/config:brpc_with_urma": [
+            "@umdk//:urma_headers",
+        ],
+        "//conditions:default": [],
+    }) + select({
         "//bazel/config:brpc_with_thrift": [
             "@org_apache_thrift//:thrift",
         ],

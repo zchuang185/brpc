@@ -30,9 +30,11 @@ cmake -B build
 make -C build -j$(nproc)
 ```
 
-若系统存在 URMA SDK，`WITH_URMA=ON` 会添加 `-DBRPC_WITH_URMA=1` 并链接
-`liburma`。SDK 不存在时，CMake 使用仓库内置 mock，使 URMA 代码和测试仍可
-在无硬件环境编译；mock 不提供硬件数据通路。
+`WITH_URMA=ON` 使用上游 UMDK 头文件进行编译。CMake 优先使用系统安装的
+SDK；找不到头文件时，会参照 Mooncake 的 mock 构建方式下载固定版本的
+UMDK，可通过 `DOWNLOAD_URMA_HEADERS=OFF` 禁止下载。找到 `liburma` 时使用
+真实硬件数据通路，否则链接 brpc 的 mock，使 URMA 代码和测试仍可在无硬件
+环境编译。
 
 ## 使用
 
@@ -122,7 +124,7 @@ block 都由注册 segment 支撑，发送路径可直接从 IOBuf block refs �
 
 设备名以 `bonding` 开头时，brpc 会在创建 context 后、创建 segment 和队列
 前配置 provider。默认 standalone+IODIE 配置与 UMDK 性能工具保持一致。
-bonding 支持需要 provider 扩展头文件 `urma/urma_ubagg.h`。
+bonding 支持需要 provider 扩展头文件 `urma_ubagg.h`。
 
 ## 与 UBRing 协同
 

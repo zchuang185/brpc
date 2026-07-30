@@ -16,10 +16,9 @@
 // under the License.
 
 // Link-time mock of the URMA user-level C API, modeled on Mooncake's
-// mock_urma.cpp. When liburma.so is not available, this TU is compiled into
-// brpc and provides fake implementations of every urma_* symbol the transport
-// calls. It lets CI run UrmaTransport unit tests on hosts without URMA
-// hardware.
+// mock_urma.cpp. It compiles against upstream UMDK headers and is linked into
+// brpc when liburma.so is unavailable. It lets CI run UrmaTransport unit tests
+// without URMA hardware.
 //
 // Design (same as Mooncake):
 // - Link-time substitution: the symbols are literally named urma_create_jfc
@@ -35,7 +34,7 @@
 
 #if BRPC_WITH_URMA
 
-#include "urma/urma_api.h"
+#include "urma_api.h"
 
 #include <algorithm>
 #include <atomic>

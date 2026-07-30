@@ -22,11 +22,11 @@
 #if BRPC_WITH_URMA
 #include "butil/atomicops.h"
 #include "butil/sys_byteorder.h"
-#include "urma/urma_api.h"
+#include "urma_api.h"
 #include "brpc/urma/urma_handshake.h"
 #include "brpc/urma/urma_handshake.pb.h"
 #include "brpc/urma/urma_helper.h"
-#include "urma/urma_types.h"
+#include "urma_types.h"
 
 using namespace brpc;
 
@@ -297,7 +297,7 @@ protected:
                 EXPECT_EQ(URMA_SUCCESS, urma_uninit());
                 _owns_urma_init = false;
             }
-            GTEST_SKIP() << "UrmaMockTest requires the bundled URMA mock";
+            GTEST_SKIP() << "UrmaMockTest requires the URMA link-time mock";
         }
     }
 

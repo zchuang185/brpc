@@ -30,10 +30,13 @@ cmake -B build
 make -C build -j$(nproc)
 ```
 
-When the URMA SDK is available, `WITH_URMA=ON` adds
-`-DBRPC_WITH_URMA=1` and links `liburma`. If the SDK is unavailable, CMake
-uses the bundled mock implementation so URMA code and tests can still be
-built without hardware. The mock does not provide a hardware data path.
+`WITH_URMA=ON` compiles against upstream UMDK headers. CMake prefers an
+installed SDK and, following Mooncake's mock setup, downloads a pinned UMDK
+release when the headers are unavailable. Set `DOWNLOAD_URMA_HEADERS=OFF` to
+disable downloading.
+When `liburma` is found it is linked for the hardware data path. Otherwise,
+brpc uses its link-time mock so URMA code and tests can still be built without
+hardware.
 
 ## Usage
 
@@ -131,8 +134,7 @@ All flags use the `urma_` prefix (mirroring RDMA's `rdma_` prefix):
 For a device whose name starts with `bonding`, brpc configures the provider
 immediately after context creation and before creating segments or queues.
 The default standalone+IODIE combination matches the UMDK performance tool.
-Bonding support requires the provider extension header
-`urma/urma_ubagg.h`.
+Bonding support requires the provider extension header `urma_ubagg.h`.
 
 ## Coexistence with UBRing
 

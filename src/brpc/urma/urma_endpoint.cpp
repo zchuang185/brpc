@@ -43,7 +43,7 @@
 #include "bthread/bthread.h"
 #include "bthread/butex.h"
 
-#include "urma/urma_api.h"
+#include "urma_api.h"
 
 #include "brpc/input_messenger.h"
 #include "brpc/socket.h"
@@ -593,7 +593,7 @@ int UrmaEndpoint::ImportPeer(const ParsedHello& peer) {
             urma_import_jetty(ctx, &bonding_remote.base, &token);
 #else
         LOG(ERROR) << "Bonding remote jetty import requires provider header "
-                      "urma/urma_ubagg.h";
+                      "urma_ubagg.h";
         errno = ENOTSUP;
 #endif
     } else {

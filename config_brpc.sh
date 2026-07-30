@@ -540,19 +540,21 @@ fi
 
 if [ $WITH_URMA != 0 ]; then
     URMA_LIB=$(find_dir_of_lib urma)
-    URMA_HDR=$(find_dir_of_header urma/urma_api.h)
+    URMA_HDR=$(find_dir_of_header_or_die urma_api.h)
+    URMA_BOND_HDR=$(find_dir_of_header urma_ubagg.h)
     CPPFLAGS="${CPPFLAGS} -DBRPC_WITH_URMA=1"
     append_to_output "WITH_URMA=1"
-    if [ -n "$URMA_LIB" ] && [ -n "$URMA_HDR" ]; then
+    append_to_output_headers "$URMA_HDR"
+    if [ -n "$URMA_BOND_HDR" ]; then
+        append_to_output_headers "$URMA_BOND_HDR"
+    fi
+    if [ -n "$URMA_LIB" ]; then
         append_to_output_libs "$URMA_LIB"
-        append_to_output_headers "$URMA_HDR"
         append_to_output "DYNAMIC_LINKINGS+=-lurma"
         append_to_output "URMA_USE_MOCK=0"
     else
-        URMA_MOCK_HDR="$(${REALPATH} src/brpc/urma/sdk)"
-        append_to_output_headers "$URMA_MOCK_HDR"
         append_to_output "URMA_USE_MOCK=1"
-        print_info "liburma not found; using bundled URMA mock"
+        print_info "liburma not found; using URMA link-time mock"
     fi
 fi
 

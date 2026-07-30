@@ -756,9 +756,23 @@ ssize_t UrmaEndpoint::CutFromIOBufList(butil::IOBuf** from, size_t ndata) {
             << " sq_window=" << sq_wnd
             << " remote_rq_window=" << remote_wnd
             << " on " << _socket->description();
+
+        // Reserve both credits before making the WR visible to the provider.
+        // In polling mode a completion (and even the peer's receive-credit
+        // ACK) can be processed by another thread before post_send returns.
+        // Decrementing after post therefore creates a transient capacity + 1
+        // window and makes the strict credit check tear down a healthy
+        // connection.
+        const uint16_t remote_wnd_after =
+            _remote_rq_window_size.fetch_sub(
+                1, butil::memory_order_relaxed) - 1;
+        const uint16_t sq_wnd_after =
+            _sq_window_size.fetch_sub(1, butil::memory_order_relaxed) - 1;
         int rc = urma_post_jetty_send_wr(_resource->jetty, &wr, &bad_wr);
         if (rc != URMA_SUCCESS) {
             const int provider_errno = errno;
+            _remote_rq_window_size.fetch_add(1, butil::memory_order_relaxed);
+            _sq_window_size.fetch_add(1, butil::memory_order_relaxed);
             LOG(WARNING) << "urma_post_jetty_send_wr failed: " << rc
                          << ", provider_errno=" << provider_errno
                          << " (" << berror(provider_errno) << ')'
@@ -786,12 +800,10 @@ ssize_t UrmaEndpoint::CutFromIOBufList(butil::IOBuf** from, size_t ndata) {
             << " local_jetty_id=" << local_jetty_id
             << " remote_jetty_id=" << remote_jetty_id
             << " state=" << GetStateStr()
-            << " sq_window_after=" << (sq_wnd - 1)
-            << " remote_rq_window_after=" << (remote_wnd - 1)
+            << " sq_window_after=" << sq_wnd_after
+            << " remote_rq_window_after=" << remote_wnd_after
             << " on " << _socket->description();
         _sq_current = (_sq_current + 1) % (_sq_size - RESERVED_WR_NUM);
-        _remote_rq_window_size.fetch_sub(1, butil::memory_order_relaxed);
-        _sq_window_size.fetch_sub(1, butil::memory_order_relaxed);
         total_len += static_cast<ssize_t>(this_len);
     }
     return total_len;
@@ -894,6 +906,10 @@ int UrmaEndpoint::SendImm(uint32_t imm) {
     if (!_resource || !_resource->jetty || !_resource->remote_jetty) {
         errno = ENOTCONN; return -1;
     }
+    if (_sq_imm_window_size == 0) {
+        errno = EAGAIN;
+        return -1;
+    }
     // Empty-payload SEND_IMM flushes peer-side receive credit. Connection
     // lifetime is owned by the TCP fd, so this is not an EOF marker.
     urma_jfs_wr_t wr{};
@@ -905,10 +921,15 @@ int UrmaEndpoint::SendImm(uint32_t imm) {
     wr.send.imm_data = imm;
     wr.user_ctx = 0;  // 0 == pure ack (HandleCompletion reuses budget).
     urma_jfs_wr_t* bad = nullptr;
+    // Reserve the ACK-only SQ slot before posting for the same reason as the
+    // data windows in CutFromIOBufList: polling may observe its completion as
+    // soon as the provider accepts the WR.
+    --_sq_imm_window_size;
     const urma_status_t status =
         urma_post_jetty_send_wr(_resource->jetty, &wr, &bad);
     if (status != URMA_SUCCESS) {
         const int provider_errno = errno;
+        ++_sq_imm_window_size;
         _new_rq_wrs.fetch_add(imm, butil::memory_order_relaxed);
         LOG(WARNING) << "Failed to post URMA credit ACK: status=" << status
                      << " provider_errno=" << provider_errno
@@ -931,7 +952,6 @@ int UrmaEndpoint::SendImm(uint32_t imm) {
         << " remote_jetty_id=" << _resource->remote_jetty->id.id
         << " state=" << GetStateStr()
         << " on " << _socket->description();
-    if (_sq_imm_window_size > 0) { --_sq_imm_window_size; }
     return 0;
 }
 
@@ -974,17 +994,45 @@ ssize_t UrmaEndpoint::HandleCompletion(const urma_cr_t& cr) {
         // Send completion: reclaim SQ window and wake the writer.
         if (cr.user_ctx == 0) {
             // Pure-ack WR: just replenish the imm budget.
+            if (_sq_imm_window_size >= RESERVED_WR_NUM) {
+                LOG(WARNING)
+                    << "URMA credit-ACK completion exceeds reserved SQ "
+                       "window: current="
+                    << _sq_imm_window_size
+                    << " capacity=" << RESERVED_WR_NUM
+                    << " on " << _socket->description();
+                errno = EPROTO;
+                return -1;
+            }
             _sq_imm_window_size += 1;
             SendAck(0);
             return 0;
         }
         uint16_t wnd = 1;  // We signal every WR (complete_enable=1).
+        uint16_t old =
+            _sq_window_size.load(butil::memory_order_relaxed);
+        while (true) {
+            if (old >= _local_window_capacity) {
+                LOG(WARNING)
+                    << "URMA send completion exceeds SQ window: old=" << old
+                    << " increment=" << wnd
+                    << " capacity=" << _local_window_capacity
+                    << " user_ctx=" << cr.user_ctx
+                    << " on " << _socket->description();
+                errno = EPROTO;
+                return -1;
+            }
+            if (_sq_window_size.compare_exchange_weak(
+                    old, static_cast<uint16_t>(old + wnd),
+                    butil::memory_order_relaxed)) {
+                break;
+            }
+        }
         for (uint16_t i = 0; i < wnd; ++i) {
             _sbuf[_sq_sent].clear();
             _sq_sent = (_sq_sent + 1) % (_sq_size - RESERVED_WR_NUM);
         }
         butil::subtle::MemoryBarrier();
-        _sq_window_size.fetch_add(wnd, butil::memory_order_relaxed);
         if (_remote_rq_window_size.load(butil::memory_order_relaxed) >=
             _local_window_capacity / 8) {
             _socket->WakeAsEpollOut();
@@ -1003,7 +1051,14 @@ ssize_t UrmaEndpoint::HandleCompletion(const urma_cr_t& cr) {
             _remote_rq_window_size.load(butil::memory_order_relaxed);
         while (true) {
             if (old > _local_window_capacity - acks) {
-                LOG(WARNING) << "URMA receive credit exceeds window";
+                LOG(WARNING)
+                    << "URMA receive credit exceeds window: old=" << old
+                    << " credit=" << acks
+                    << " capacity=" << _local_window_capacity
+                    << " imm=" << cr.imm_data
+                    << " remote_window_capacity="
+                    << _remote_window_capacity
+                    << " on " << _socket->description();
                 errno = EPROTO;
                 return -1;
             }

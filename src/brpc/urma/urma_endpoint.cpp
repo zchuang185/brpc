@@ -1154,84 +1154,110 @@ void UrmaEndpoint::PollCq(Socket* m) {
     if (Socket::Address(ep->_socket->id(), &s) != 0) { return; }
     if (s->Failed()) { return; }
 
-    urma_jfc_t* event_jfc = nullptr;
     const bool event_mode = !FLAGS_urma_use_polling;
-    if (event_mode) {
-        const int event_count = ep->WaitCqEvent(s, &event_jfc);
-        if (event_count <= 0) {
-            return;
-        }
-    }
-
-    ssize_t bytes = 0;
-    int total_completions = 0;
-    auto drain_cq = [&]() -> int {
-        while (true) {
-            int n = std::max(1, std::min<int>(FLAGS_urma_cqe_poll_once, 32));
-            urma_cr_t crs[32];
-            int cnt = urma_poll_jfc(ep->_resource->jfc, n, crs);
-            if (cnt < 0) {
-                return EIO;
-            }
-            if (cnt == 0) { return 0; }
-            total_completions += cnt;
-            LOG_IF(INFO, FLAGS_urma_trace_verbose)
-                << "URMA polled " << cnt << " completion(s) on "
-                << s->description()
-                << " state=" << ep->GetStateStr();
-            for (int i = 0; i < cnt; ++i) {
-                if (s->Failed()) {
-                    return ECANCELED;
-                }
-                ssize_t nr = ep->HandleCompletion(crs[i]);
-                if (nr < 0) {
-                    return errno ? errno : EIO;
-                }
-                bytes += nr;
-            }
-        }
-    };
-
-    int completion_error = drain_cq();
-    if (event_mode) {
-        // The bonding provider records which physical JFCs produced CRs while
-        // bondp_poll_jfc drains the virtual JFC. bondp_rearm_jfc consumes that
-        // mask, so rearming before the drain leaves those physical JFCs
-        // unarmed and can lose all later notifications from that path.
-        uint32_t nevents = 1;
-        urma_ack_jfc(&event_jfc, &nevents, 1);
-        if (completion_error == 0) {
-            const int completions_before_rearm = total_completions;
-            if (ep->ReqNotifyCq() != 0) {
+    int progress = Socket::PROGRESS_INIT;
+    while (true) {
+        urma_jfc_t* event_jfc = nullptr;
+        if (event_mode) {
+            const int event_count = ep->WaitCqEvent(s, &event_jfc);
+            if (event_count < 0) {
                 return;
             }
-            LOG_IF(INFO, FLAGS_urma_trace_verbose)
-                << "URMA JFC event drained, acknowledged and rearmed: "
-                << "completions=" << completions_before_rearm
-                << " on " << s->description();
-
-            // Close the drain/rearm race. A completion that arrived while the
-            // JFC was unarmed may not produce an edge on every provider. The
-            // JFC is armed now, so a final nonblocking drain is safe; if it
-            // already generated an event, the next callback merely sees an
-            // empty queue and rearms it again.
-            completion_error = drain_cq();
-            LOG_IF(INFO, FLAGS_urma_trace_verbose &&
-                             total_completions > completions_before_rearm)
-                << "URMA drained "
-                << (total_completions - completions_before_rearm)
-                << " completion(s) after JFC rearm on "
-                << s->description();
+            if (event_count == 0) {
+                if (!m->MoreReadEvents(&progress)) {
+                    return;
+                }
+                continue;
+            }
         }
-    }
 
-    if (completion_error != 0) {
-        if (!s->Failed()) {
-            s->SetFailed(completion_error, "URMA completion error");
+        ssize_t bytes = 0;
+        int total_completions = 0;
+        auto drain_cq = [&]() -> int {
+            while (true) {
+                const int n =
+                    std::max(1, std::min<int>(FLAGS_urma_cqe_poll_once, 32));
+                urma_cr_t crs[32];
+                const int cnt =
+                    urma_poll_jfc(ep->_resource->jfc, n, crs);
+                if (cnt < 0) {
+                    return EIO;
+                }
+                if (cnt == 0) { return 0; }
+                total_completions += cnt;
+                LOG_IF(INFO, FLAGS_urma_trace_verbose)
+                    << "URMA polled " << cnt << " completion(s) on "
+                    << s->description()
+                    << " state=" << ep->GetStateStr();
+                for (int i = 0; i < cnt; ++i) {
+                    if (s->Failed()) {
+                        return ECANCELED;
+                    }
+                    const ssize_t nr = ep->HandleCompletion(crs[i]);
+                    if (nr < 0) {
+                        return errno ? errno : EIO;
+                    }
+                    bytes += nr;
+                }
+            }
+        };
+
+        int completion_error = drain_cq();
+        if (event_mode) {
+            // The bonding provider records which physical JFCs produced CRs
+            // while bondp_poll_jfc drains the virtual JFC.
+            // bondp_rearm_jfc consumes that mask, so rearming before the drain
+            // leaves those physical JFCs unarmed.
+            uint32_t nevents = 1;
+            urma_ack_jfc(&event_jfc, &nevents, 1);
+            if (completion_error == 0) {
+                const int completions_before_rearm = total_completions;
+                if (ep->ReqNotifyCq() != 0) {
+                    return;
+                }
+                LOG_IF(INFO, FLAGS_urma_trace_verbose)
+                    << "URMA JFC event drained, acknowledged and rearmed: "
+                    << "completions=" << completions_before_rearm
+                    << " on " << s->description();
+
+                // Close the drain/rearm race. A completion that arrived while
+                // the JFC was unarmed may not produce an edge on every
+                // provider. The JFC is armed now, so a final nonblocking drain
+                // is safe.
+                completion_error = drain_cq();
+                LOG_IF(INFO, FLAGS_urma_trace_verbose &&
+                                 total_completions >
+                                     completions_before_rearm)
+                    << "URMA drained "
+                    << (total_completions - completions_before_rearm)
+                    << " completion(s) after JFC rearm on "
+                    << s->description();
+            }
         }
-        return;
+
+        if (completion_error != 0) {
+            if (!s->Failed()) {
+                s->SetFailed(completion_error, "URMA completion error");
+            }
+            return;
+        }
+        ep->DispatchReceivedBytes(s, bytes);
+
+        if (!event_mode) {
+            return;
+        }
+        // Socket::OnInputEvent increments _nevent and starts this callback only
+        // for the 0 -> 1 transition. MoreReadEvents resets it to zero when no
+        // event raced with this callback, or asks us to consume the additional
+        // JFCE event in this same callback. Without this step event mode stops
+        // permanently after its first completion.
+        if (!m->MoreReadEvents(&progress)) {
+            return;
+        }
+        LOG_IF(INFO, FLAGS_urma_trace_verbose)
+            << "URMA JFCE has additional edge-triggered event(s), progress="
+            << progress << " on " << s->description();
     }
-    ep->DispatchReceivedBytes(s, bytes);
 }
 
 // ============================================================================

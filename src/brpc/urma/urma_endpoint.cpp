@@ -1105,6 +1105,19 @@ void UrmaEndpoint::PollCq(Socket* m) {
         if (event_count <= 0) {
             return;
         }
+        // Rearm before draining the JFC. If a new completion arrives after
+        // the drain observes an empty queue but before rearm, no new edge may
+        // be generated and the completion can remain pending indefinitely.
+        // This ordering matches the URMA event loop used by yalantinglibs:
+        // wait_jfc -> ack_jfc -> rearm_jfc -> poll_jfc.
+        uint32_t nevents = 1;
+        urma_ack_jfc(&event_jfc, &nevents, 1);
+        if (ep->ReqNotifyCq() != 0) {
+            return;
+        }
+        LOG_IF(INFO, FLAGS_urma_trace_verbose)
+            << "URMA JFC event acknowledged and rearmed before drain on "
+            << s->description();
     }
 
     ssize_t bytes = 0;
@@ -1137,15 +1150,6 @@ void UrmaEndpoint::PollCq(Socket* m) {
         if (completion_error != 0) { break; }
     }
 
-    if (!FLAGS_urma_use_polling) {
-        // URMA requires this strict order:
-        // wait_jfc -> poll_jfc -> ack_jfc -> rearm_jfc.
-        uint32_t nevents = 1;
-        urma_ack_jfc(&event_jfc, &nevents, 1);
-        if (ep->ReqNotifyCq() != 0) {
-            return;
-        }
-    }
     if (completion_error != 0) {
         if (!s->Failed()) {
             s->SetFailed(completion_error, "URMA completion error");

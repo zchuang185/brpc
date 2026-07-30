@@ -242,7 +242,8 @@ private:
     void DispatchReceivedBytes(SocketUniquePtr& s, ssize_t bytes);
 
     // Consume one async event from the JFCE fd (event mode only). The caller
-    // must poll the JFC before acknowledging and rearming the event.
+    // must acknowledge and rearm the JFC before draining completions so a
+    // completion arriving during the drain cannot lose its notification.
     int WaitCqEvent(SocketUniquePtr& s, urma_jfc_t** event_jfc);
 
     // Request completion notification (event mode only).

@@ -40,11 +40,13 @@ public:
               const PerfTestRequest* request,
               PerfTestResponse* response,
               google::protobuf::Closure* done) {
+        LOG(ERROR) << "Enter server Test()";
         brpc::ClosureGuard done_guard(done);
         uint64_t last = g_last_time.load(butil::memory_order_relaxed);
         uint64_t now = butil::monotonic_time_us();
         if (now > last && now - last > 100000) {
             if (g_last_time.exchange(now, butil::memory_order_relaxed) == last) {
+                LOG(ERROR) << "Updating CPU usage";
                 response->set_cpu_usage(bvar::Variable::describe_exposed("process_cpu_usage"));
             } else {
                 response->set_cpu_usage("");

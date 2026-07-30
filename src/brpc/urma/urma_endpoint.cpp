@@ -442,7 +442,7 @@ int UrmaEndpoint::AllocateResources() {
         jetty_cfg.flag.bs.share_jfr = 1;
         jetty_cfg.jfs_cfg.depth = static_cast<uint32_t>(_sq_size);
         jetty_cfg.jfs_cfg.trans_mode = URMA_TM_RM;
-        jetty_cfg.jfs_cfg.priority = URMA_MAX_PRIORITY;
+        jetty_cfg.jfs_cfg.priority = GetUrmaJettyPriority();
         jetty_cfg.jfs_cfg.max_sge =
             static_cast<uint8_t>(GetUrmaMaxSge());
         jetty_cfg.jfs_cfg.rnr_retry = URMA_TYPICAL_RNR_RETRY;
@@ -1799,7 +1799,7 @@ int UrmaEndpoint::GlobalInitialize() {
         jetty_cfg.flag.bs.share_jfr = 1;
         jetty_cfg.jfs_cfg.depth = static_cast<uint32_t>(FLAGS_urma_sq_size);
         jetty_cfg.jfs_cfg.trans_mode = URMA_TM_RM;
-        jetty_cfg.jfs_cfg.priority = URMA_MAX_PRIORITY;
+        jetty_cfg.jfs_cfg.priority = GetUrmaJettyPriority();
         jetty_cfg.jfs_cfg.max_sge =
             static_cast<uint8_t>(GetUrmaMaxSge());
         jetty_cfg.jfs_cfg.rnr_retry = URMA_TYPICAL_RNR_RETRY;

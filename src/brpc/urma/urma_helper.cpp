@@ -131,6 +131,9 @@ static urma_device_attr_t g_device_attr{};
 static int g_max_sge = 1;
 static size_t g_recv_block_size = 8 * 1024;
 static bool g_is_bonding_device = false;
+// Yalanting uses priority 6 for CTP. Prefer the device capability table when
+// available, and retain 6 as the compatibility fallback.
+static uint8_t g_jetty_priority = 6;
 // urma_init/urma_uninit manage process-global liburma state. Only uninitialize
 // it when this helper performed the successful initialization; URMA_EEXIST
 // means another component owns that state.
@@ -172,6 +175,22 @@ size_t AlignUp(size_t v, size_t align) {
 
 bool IsBondingDeviceName(const char* name) {
     return name != nullptr && strncmp(name, "bonding", 7) == 0;
+}
+
+union urma_tp_type_en TpTypeCapability(urma_tp_type_t tp_type) {
+    union urma_tp_type_en capability{};
+    switch (tp_type) {
+    case URMA_RTP:
+        capability.bs.rtp = 1;
+        break;
+    case URMA_CTP:
+        capability.bs.ctp = 1;
+        break;
+    case URMA_UTP:
+        capability.bs.utp = 1;
+        break;
+    }
+    return capability;
 }
 
 bool ConfigureBondingMode(const std::string& device_name) {
@@ -432,6 +451,7 @@ static void GlobalRelease() {
     g_local_eid = urma_eid_t{};
     g_has_local_eid = false;
     g_is_bonding_device = false;
+    g_jetty_priority = 6;
     if (g_owns_urma_init) {
         const urma_status_t status = urma_uninit();
         if (status != URMA_SUCCESS) {
@@ -507,6 +527,21 @@ static bool GlobalUrmaInitializeImpl() {
         g_device = nullptr;
         return false;
     }
+    const int ctp_priority =
+        FindUrmaPriorityForTpType(g_device_attr, URMA_CTP);
+    if (ctp_priority >= 0) {
+        g_jetty_priority = static_cast<uint8_t>(ctp_priority);
+    } else {
+        LOG(WARNING) << "URMA device does not report a CTP priority; "
+                        "falling back to Yalanting-compatible priority "
+                     << static_cast<unsigned>(g_jetty_priority);
+    }
+    const auto& selected_priority =
+        g_device_attr.dev_cap.priority_info[g_jetty_priority];
+    LOG(INFO) << "URMA selected CTP jetty priority="
+              << static_cast<unsigned>(g_jetty_priority)
+              << " tp_cap=" << selected_priority.tp_type.value
+              << " sl=" << selected_priority.SL;
     uint32_t eid_cnt = 0;
     urma_eid_info_t* eids = urma_get_eid_list(found, &eid_cnt);
     if (!eids || eid_cnt == 0) {
@@ -643,6 +678,18 @@ const urma_eid_t* GetUrmaLocalEid() {
     return g_has_local_eid ? &g_local_eid : nullptr;
 }
 bool IsUrmaBondingDevice() { return g_is_bonding_device; }
+int FindUrmaPriorityForTpType(const urma_device_attr_t& attr,
+                              urma_tp_type_t tp_type) {
+    const union urma_tp_type_en expected = TpTypeCapability(tp_type);
+    for (int priority = 0; priority <= URMA_MAX_PRIORITY; ++priority) {
+        if (attr.dev_cap.priority_info[priority].tp_type.value ==
+            expected.value) {
+            return priority;
+        }
+    }
+    return -1;
+}
+uint8_t GetUrmaJettyPriority() { return g_jetty_priority; }
 int GetUrmaMaxSge() { return g_max_sge; }
 size_t GetUrmaRecvBlockSize() { return g_recv_block_size; }
 

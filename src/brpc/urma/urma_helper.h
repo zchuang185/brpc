@@ -76,6 +76,14 @@ const urma_eid_t* GetUrmaLocalEid();
 // Return true when the selected URMA device is a bonding provider device.
 bool IsUrmaBondingDevice();
 
+// Find the priority whose advertised transport-path capability exactly
+// matches @tp_type. Returns -1 when the device does not report one.
+int FindUrmaPriorityForTpType(const urma_device_attr_t& attr,
+                              urma_tp_type_t tp_type);
+
+// Return the priority selected for the CTP jettys created by brpc.
+uint8_t GetUrmaJettyPriority();
+
 // If the URMA environment is available.
 bool IsUrmaAvailable();
 

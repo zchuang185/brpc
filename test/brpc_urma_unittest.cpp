@@ -242,6 +242,16 @@ TEST(UrmaHandshakeTest, rejects_invalid_resource_and_window_values) {
     EXPECT_FALSE(urma::ValidHello(hello));
 }
 
+TEST(UrmaHelperTest, selects_priority_matching_transport_path_type) {
+    urma_device_attr_t attr{};
+    attr.dev_cap.priority_info[3].tp_type.bs.rtp = 1;
+    attr.dev_cap.priority_info[6].tp_type.bs.ctp = 1;
+
+    EXPECT_EQ(3, urma::FindUrmaPriorityForTpType(attr, URMA_RTP));
+    EXPECT_EQ(6, urma::FindUrmaPriorityForTpType(attr, URMA_CTP));
+    EXPECT_EQ(-1, urma::FindUrmaPriorityForTpType(attr, URMA_UTP));
+}
+
 // ---------------------------------------------------------------------------
 // SupportedByUrma: only baidu_std.
 // ---------------------------------------------------------------------------

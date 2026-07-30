@@ -145,8 +145,9 @@ public:
     // CQ completion poller: the edge-triggered callback for the CQ socket
     // (whose user is this endpoint). Drains urma_poll_jfc and feeds the
     // completions into HandleCompletion, then calls InputMessenger. Event mode
-    // must finish each cycle with Socket::MoreReadEvents so later JFCE edges
-    // can start the callback again.
+    // also drains the aggregated JFCE until urma_wait_jfc reports no event,
+    // then calls Socket::MoreReadEvents so later JFCE edges can start the
+    // callback again.
     static void PollCq(Socket* m);
 
     // Initialize the per-tag polling infrastructure (polling mode).

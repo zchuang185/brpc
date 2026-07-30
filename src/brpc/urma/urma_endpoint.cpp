@@ -1156,6 +1156,7 @@ void UrmaEndpoint::PollCq(Socket* m) {
 
     const bool event_mode = !FLAGS_urma_use_polling;
     int progress = Socket::PROGRESS_INIT;
+    int drained_events = 0;
     while (true) {
         urma_jfc_t* event_jfc = nullptr;
         if (event_mode) {
@@ -1164,11 +1165,18 @@ void UrmaEndpoint::PollCq(Socket* m) {
                 return;
             }
             if (event_count == 0) {
+                LOG_IF(INFO, FLAGS_urma_trace_verbose && drained_events > 0)
+                    << "URMA JFCE event queue drained: events="
+                    << drained_events << " on " << s->description();
                 if (!m->MoreReadEvents(&progress)) {
                     return;
                 }
+                LOG_IF(INFO, FLAGS_urma_trace_verbose)
+                    << "URMA JFCE has additional edge-triggered event(s), "
+                    << "progress=" << progress << " on " << s->description();
                 continue;
             }
+            drained_events += event_count;
         }
 
         ssize_t bytes = 0;
@@ -1246,17 +1254,13 @@ void UrmaEndpoint::PollCq(Socket* m) {
         if (!event_mode) {
             return;
         }
-        // Socket::OnInputEvent increments _nevent and starts this callback only
-        // for the 0 -> 1 transition. MoreReadEvents resets it to zero when no
-        // event raced with this callback, or asks us to consume the additional
-        // JFCE event in this same callback. Without this step event mode stops
-        // permanently after its first completion.
-        if (!m->MoreReadEvents(&progress)) {
-            return;
-        }
-        LOG_IF(INFO, FLAGS_urma_trace_verbose)
-            << "URMA JFCE has additional edge-triggered event(s), progress="
-            << progress << " on " << s->description();
+        // The bonding JFCE fd is itself an epoll fd aggregating physical
+        // JFCEs, while brpc watches it with EPOLLET. urma_wait_jfc(..., 1, ...)
+        // consumes only one aggregated event. Keep draining the inner JFCE
+        // until it reports no event; otherwise another physical event can
+        // leave the fd continuously readable and never create a new outer
+        // edge. The event_count == 0 branch above resets _nevent only after
+        // the inner queue is empty.
     }
 }
 
